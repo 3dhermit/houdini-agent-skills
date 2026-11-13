@@ -41,7 +41,14 @@ PARM_CANDIDATES = {
 XPU_PARM_HINTS = ("renderer", "rendermethod", "schedule", "xpu")
 
 
+CATEGORY = "rendering"
+
+
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     s = get_session()
     s.require(ALL, f"rendering.{action}")
     return _HANDLERS[action](s, payload)
@@ -95,10 +102,11 @@ def _configure(s, p):
     if p.get("resolution"):
         knobs["resolutionx"] = int(p["resolution"][0])
         knobs["resolutiony"] = int(p["resolution"][1])
-    if p.get("frames"):
+    frames = p.get("frames") or []
+    if frames:
         knobs["range_enable"] = "normal"   # Karma's trange is a menu, not a toggle
-        knobs["start"] = float(p["frames"][0])
-        knobs["end"] = float(p["frames"][1])
+        knobs["start"] = float(frames[0])
+        knobs["end"] = float(frames[1])
     if p.get("output_path"):
         knobs["output_path"] = p["output_path"]
     if p.get("samples"):

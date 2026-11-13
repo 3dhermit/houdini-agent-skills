@@ -144,6 +144,87 @@ class TestRegistry(unittest.TestCase):
                 raw = json.load(fh)
             self.assertEqual(raw["name"], spec.meta["name"])
 
+    def test_handlers_only_require_keys_the_schema_guarantees(self):
+        """A handler may read p["x"] only if x is required or has a schema default.
+
+        prepare() fills defaults, so those are safe; an optional key with no
+        default is a KeyError waiting at the call site. sop-automation find/limit
+        hit exactly this before the check existed.
+        """
+        import re
+        offenders = []
+        for spec in self.skills.values():
+            guaranteed = set()
+            for schema in spec.meta["actions"].values():
+                guaranteed.update(schema.get("required", []))
+                for key, ks in (schema.get("properties", {}) or {}).items():
+                    if isinstance(ks, dict) and "default" in ks:
+                        guaranteed.add(key)
+            with open(os.path.join(spec.dir, "skill.py"), encoding="utf-8") as fh:
+                src = fh.read()
+            keys = set(re.findall(r'\bp\["([a-z_0-9]+)"\]', src))
+            keys |= set(re.findall(r'\bpayload\["([a-z_0-9]+)"\]', src))
+            for key in sorted(keys - guaranteed):
+                offenders.append(f'{spec.category}: p["{key}"]')
+            if "prepare(" not in src:
+                offenders.append(f"{spec.category}: run() does not call registry.prepare(), "
+                                 "so a direct skill.run() skips validation and defaults")
+        self.assertEqual(offenders, [], "unguarded payload reads: " + ", ".join(offenders))
+
+
+class TestCliContract(unittest.TestCase):
+    """The CLI contract has to hold from a shell, not just in-process.
+
+    Every expectation here was produced by running the commands on 22.0.368 /
+    this machine; if an exit code or error kind changes, this test says so before
+    an agent's automation does.
+    """
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _cli(self, *args):
+        import subprocess
+        return subprocess.run([sys.executable, "-m", "houdini_skills.cli", *args],
+                              cwd=self.ROOT, capture_output=True, text=True)
+
+    def test_list_is_json_exit_zero(self):
+        r = self._cli("--list")
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(json.loads(r.stdout)["skills"])
+
+    def test_pure_action_works_without_houdini(self):
+        r = self._cli("troubleshooting", "hou_lookup", "--json", '{"name":"parmNames"}')
+        self.assertEqual(r.returncode, 0)
+        data = json.loads(r.stdout)
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["exists_in_hou"])
+
+    def test_scene_action_without_houdini_is_structured_not_a_traceback(self):
+        r = self._cli("sop-automation", "grid_bevel",
+                      "--json", '{"container":"x","size":[1,0,1],"divisions":2}')
+        self.assertEqual(r.returncode, 1)
+        data = json.loads(r.stdout)
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["error"]["kind"], "houdini_unavailable")
+        self.assertNotIn("Traceback", r.stderr,
+                         "an expected condition leaked a traceback")
+
+    def test_bad_payload_is_a_structured_error(self):
+        r = self._cli("sop-automation", "grid_bevel", "--json", "{not json")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(json.loads(r.stdout)["error"]["kind"], "invalid_json")
+
+    def test_unknown_skill_lists_the_real_ones(self):
+        r = self._cli("nope-skill", "go", "--json", "{}")
+        self.assertEqual(r.returncode, 1)
+        err = json.loads(r.stdout)["error"]
+        self.assertEqual(err["kind"], "unknown_skill")
+        self.assertIn("sop-automation", err["hint"])
+
+    def test_argparse_misuse_exits_two(self):
+        r = self._cli("--not-a-flag")
+        self.assertEqual(r.returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

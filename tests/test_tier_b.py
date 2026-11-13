@@ -93,6 +93,45 @@ class TestSopAutomation(unittest.TestCase):
             self.assertLessEqual(stats["piece_count_by_name"], stats["prim_count"])
 
 
+    def test_grid_bevel_binds_every_knob(self):
+        """An unresolved knob means a value the caller believes was set was NOT set.
+
+        The Grid SOP on 22.0.368 has sizex/sizey/rows/cols - no sizez, no
+        divisionsx. A candidate list that stops at the obvious names leaves the
+        depth and subdivision count silently at their defaults.
+        """
+        from skills import import_skill_module
+        sop = import_skill_module("sop-automation")
+        result = sop.run("grid_bevel", {"container": "asmtest_bind", "size": [4, 0, 4],
+                                        "divisions": 6, "bevel_width": 0.05})
+        self.assertEqual(result["unresolved_parms"], {},
+                         f"knobs not bound: {result['unresolved_parms']}")
+        # Verified geometry contract on the Grid itself (rows/cols are POINT
+        # counts on 22.0.368): 6 -> 6x6 points -> 5x5 quads.
+        grid_stats = sop.run("geo_stats", {"path": result["grid"]})
+        self.assertEqual(grid_stats["prim_count"], 25,
+                         f"6 divisions must give 25 quads, got {grid_stats['prim_count']}")
+        self.assertEqual(grid_stats["point_count"], 36)
+        self.assertGreaterEqual(result["result"]["prim_count"], 25,
+                                "the bevel must not lose the grid's faces")
+        self.s.destroy_matching("/obj/asmtest_bind")
+
+    def test_find_and_cleanup_reach_nested_nodes(self):
+        """hou.Node.allChildren() does not exist; allSubChildren() is the walk."""
+        from skills import import_skill_module
+        sop = import_skill_module("sop-automation")
+        sop.run("grid_bevel", {"container": "asmtest_deep", "size": [2, 0, 2],
+                               "divisions": 3, "bevel_width": 0.02})
+        found = sop.run("find", {"pattern": "/obj/asmtest_deep/*"})["matches"]
+        paths = [m["path"] for m in found]
+        self.assertIn("/obj/asmtest_deep/bevel1", paths,
+                      "find() only saw the top level - check _all_nodes")
+        killed = self.s.destroy_matching("/obj/asmtest_deep/*")
+        self.assertIn("/obj/asmtest_deep/grid1", killed,
+                      "destroy_matching only saw the top level; cleanup is not happening")
+        self.s.destroy_matching("/obj/asmtest_deep")
+
+
 @REAL_ONLY
 class TestVexValidation(unittest.TestCase):
     def setUp(self):
@@ -292,6 +331,31 @@ class TestVerifiedApiFacts(unittest.TestCase):
         pb.setFrameRange(11.0, 137.0)
         self.assertEqual(list(pb.frameRange()), [11.0, 137.0])
 
+    def test_node_walk_uses_allsubchildren(self):
+        """allChildren() does not exist; children() is one level and silently wrong."""
+        world = self.hou.node("/")
+        self.assertFalse(hasattr(world, "allChildren"),
+                         "allChildren() exists now - re-check _all_nodes")
+        self.assertTrue(hasattr(world, "allSubChildren"))
+        geo = self.s.ensure_geo("asmapi_walk")
+        self.s.create("null", "asmapi_deep", geo)
+        paths = [n.path() for n in world.allSubChildren()]
+        self.assertIn(f"{geo}/asmapi_deep", paths,
+                      "a node two levels down was not visible to the walk")
+
+    def test_grid_and_box_parm_names(self):
+        """The obvious names on both primitives are wrong; the probe is the doc."""
+        geo = self.s.ensure_geo("asmapi_gb")
+        grid = self.s.create("grid", "asmapi_grid", geo)
+        names = set(self.s.parm_names(grid.path()))
+        self.assertTrue({"sizex", "sizey", "rows", "cols"} <= names)
+        for wrong in ("sizez", "divisionsx", "divisionsz"):
+            self.assertNotIn(wrong, names, f"grid has a {wrong} parm now - update the doc")
+        box = self.s.create("box", "asmapi_box", geo)
+        bnames = set(self.s.parm_names(box.path()))
+        self.assertTrue({"sizex", "sizey", "sizez", "divsx"} <= bnames)
+        self.assertNotIn("divisionsx", bnames, "box divides parm was renamed again")
+
     def test_wrangle_sop_type_name(self):
         types = self._sop_types()
         self.assertIn("attribwrangle", types, "the Attribute Wrangle type is attribwrangle")
@@ -349,6 +413,8 @@ class TestVerifiedApiFacts(unittest.TestCase):
         rop = self.s.create("usd", "asmapi_usd", "/out")
         names = set(self.s.parm_names(rop.path()))
         self.assertTrue({"loppath", "lopoutput", "execute", "trange", "f1", "f2"} <= names)
+        self.assertIn("normal", rop.parm("trange").menuItems(),
+                      "the skill sets trange='normal'; the menu must still offer it")
         self.assertEqual(rop.parm("lopoutput").rawValue(), "$HIP/usd/$OS.usd",
                          "the documented default changed")
 
@@ -358,6 +424,64 @@ class TestVerifiedApiFacts(unittest.TestCase):
         self.assertIn("sublayer", lop)
         for wrong in ("stageimport", "componentlist", "addloplattriblayer"):
             self.assertNotIn(wrong, lop, f"{wrong} is not a LOP type; docs must not claim it")
+
+
+@REAL_ONLY
+class TestLargeScene(unittest.TestCase):
+    """Performance ceiling tests (the goal's 'large scene performance' item).
+
+    Not a benchmark - a guard. The two wrapper paths that would first hurt a real
+    scene are the node-tree walk behind find()/destroy_matching() and the
+    attribute reads behind geometry_stats(). An accidentally quadratic change
+    should fail here rather than in someone's viewport.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.s.destroy_matching("/obj/asmbig_*")
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asmbig_*")
+
+    def test_dense_mesh_stats_stay_under_a_ceiling(self):
+        import time
+        from skills import import_skill_module
+        sop = import_skill_module("sop-automation")
+        t0 = time.perf_counter()
+        result = sop.run("grid_bevel", {"container": "asmbig_grid", "size": [10, 0, 10],
+                                        "divisions": 200, "bevel_width": 0.01})
+        grid_stats = sop.run("geo_stats", {"path": result["grid"]})
+        stats = sop.run("geo_stats", {"path": result["bevel"]})
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(result["unresolved_parms"], {}, "200 divisions must bind")
+        # rows=cols=200 point counts -> 199x199 quads, from the verified parm probe.
+        self.assertEqual(grid_stats["prim_count"], 199 * 199,
+                         f"expected 39601 quads, got {grid_stats['prim_count']}")
+        self.assertGreater(stats["prim_count"], 30000,
+                           f"bevel output is not dense: {stats['prim_count']} prims")
+        self.assertLess(elapsed, 60.0,
+                        f"40k-prim build + stats took {elapsed:.1f}s; the wrapper or "
+                        "cook path got slower - profile before merging")
+
+    def test_node_search_over_200_nodes_stays_linear(self):
+        """find() walks every child once; a nested walk would blow up here."""
+        import time
+        from skills import import_skill_module
+        sop = import_skill_module("sop-automation")
+        geo = self.s.ensure_geo("asmbig_net")
+        for i in range(200):
+            self.s.create("null", f"asmbig_n{i:03d}", geo)
+        t0 = time.perf_counter()
+        found = sop.run("find", {"pattern": "/obj/asmbig_net/asmbig_n*", "limit": 500})
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(len(found["matches"]), 200, "every node must be found")
+        self.assertLess(elapsed, 10.0,
+                        f"200-node search took {elapsed:.1f}s - check for a nested walk")
+        t0 = time.perf_counter()
+        gone = self.s.destroy_matching("/obj/asmbig_net/asmbig_n*")
+        self.assertLess(time.perf_counter() - t0, 10.0, "bulk delete went quadratic")
+        self.assertGreaterEqual(len(gone), 200,
+                                f"destroy_matching reported {len(gone)} of 200")
 
 
 if __name__ == "__main__":

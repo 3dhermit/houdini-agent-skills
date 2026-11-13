@@ -32,7 +32,14 @@ SOPIMPORT_PARMS = {"soppath": ["soppath", "soppath1", "inputpath"]}
 OPTIONAL_KNOBS = {"make_dirs"}
 
 
+CATEGORY = "usd-pipeline"
+
+
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     s = get_session()
     s.require(SUPPORTED, f"usd-pipeline.{action}")
     return _HANDLERS[action](s, payload)
@@ -80,15 +87,16 @@ def _export(s, p):
         applied["sopimport"] = {"node": imp.path(), "parm": bound}
         target_for_rop = imp.path()
 
+    frames = p.get("frames") or []
     for knob, cands in USD_ROP_PARMS.items():
         if knob == "range_enable":
-            if not p.get("frames"):
+            if not frames:
                 continue
             value = "normal"
         elif knob == "start":
-            value = float(p["frames"][0]) if p.get("frames") else None
+            value = float(frames[0]) if frames else None
         elif knob == "end":
-            value = float(p["frames"][1]) if p.get("frames") else None
+            value = float(frames[1]) if frames else None
         elif knob == "output":
             value = out_path
         elif knob == "loppath":

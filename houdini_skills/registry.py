@@ -72,6 +72,42 @@ def get(name: str) -> SkillSpec:
     return skills[name]
 
 
+def by_category(category: str):
+    for spec in discover().values():
+        if spec.category == category:
+            return spec
+    return None
+
+
+def prepare(category: str, action: str, payload: dict) -> dict:
+    """Validate a payload and fill schema defaults for a direct skill.run() call.
+
+    run_skill() - the CLI door - already validates. Skills call this themselves so
+    both doors behave identically: without it, an optional knob with a default
+    arrives as a missing key and the handler dies with a bare KeyError instead of
+    a structured error. Found by the tier A hygiene check after sop-automation
+    find/limit raised KeyError in a direct call.
+    """
+    from .errors import SkillFailure
+    from .schema import validate
+
+    spec = by_category(category)
+    if spec is None:
+        raise SkillFailure("broken_skill", f"no skill registered for category {category!r}",
+                           hint="check the 'category' field in skills/*/meta.json")
+    schemas = spec.meta.get("actions", {})
+    if action not in schemas:
+        raise SkillFailure("unknown_action", f"{category} has no action {action!r}",
+                           hint="actions: " + ", ".join(sorted(schemas)),
+                           details={"suggestions": sorted(schemas)})
+    try:
+        return validate(payload, schemas[action])
+    except SkillFailure as exc:
+        exc.err.source = f"{category}.{action}"
+        exc.err.details.setdefault("schema", schemas[action])
+        raise
+
+
 def run_skill(name: str, action: str, payload: dict) -> dict:
     """Entry point every caller uses: validate input, dispatch, wrap errors."""
     from .errors import SkillFailure

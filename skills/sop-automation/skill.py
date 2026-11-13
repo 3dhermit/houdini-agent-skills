@@ -14,18 +14,33 @@ from houdini_skills.versions import series_range
 SUPPORTED = series_range((19, 5), (22, 0))
 
 # Friendly knob -> candidate parm names, most-likely first.
+# Verified on 22.0.368 Grid SOP: the parms are sizex, sizey, rows, cols.
+# There is NO sizez and NO divisionsx/divisionsz. A default Grid sits in the XZ
+# plane at y=0, so 'sizey' is the Z extent (probe: sizex=4 sizey=2 -> x [-2,2],
+# z [-1,1]). 'cols' is the point count along X and 'rows' along Z (probe:
+# cols=5 rows=3 -> 5 distinct x values, 3 distinct z values), so a "divisions"
+# request maps to cols/rows, not to a divisionsx parm.
 GRID_PARM_CANDIDATES = {
     "sizex": ["sizex", "sx", "size1"],
-    "sizez": ["sizez", "sz", "size2"],
-    "divisionsx": ["divisionsx", "numx", "divsx", "cols"],
-    "divisionsz": ["divisionsz", "numz", "divsz", "rows"],
+    "sizez": ["sizez", "sizey", "sz", "size2"],
+    "divisionsx": ["divisionsx", "cols", "numx", "divsx"],
+    "divisionsz": ["divisionsz", "rows", "numz", "divsz"],
 }
 BEVEL_PARM_CANDIDATES = {
-    "width": ["bevelamount", "width", "size", "offset"],
+    # Verified on 22.0.368 PolyBevel: the width parm is 'offset' (plus
+    # offsetedges/offsetpoints/useoffsetscale); no bevelamount/width/size.
+    "width": ["offset", "bevelamount", "width", "size"],
 }
+
+
+CATEGORY = "sop-automation"
 
 
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     s = get_session()
     s.require(SUPPORTED, f"sop-automation.{action}")
     handler = _HANDLERS[action]
@@ -82,7 +97,9 @@ def _read_parms(s, p):
 
 
 def _find(s, p):
-    return ok({"pattern": p["pattern"], "matches": s.find(p["pattern"], p["limit"])})
+    # 'limit' is optional in meta.json; a handler must never require an optional
+    # key, because skill.run() does not inject schema defaults (the CLI does).
+    return ok({"pattern": p["pattern"], "matches": s.find(p["pattern"], p.get("limit", 200))})
 
 
 def _geo_stats(s, p):

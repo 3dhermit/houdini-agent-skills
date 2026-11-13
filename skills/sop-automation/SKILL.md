@@ -34,7 +34,10 @@ hython -m houdini_skills.cli sop-automation grid_bevel \
 ```
 
 ## Rules that keep you out of trouble
-- **Never guess parm names.** H22 Grid uses `sizex`/`sizez`, not `sx`/`sy`/`sz`.
+- **Never guess parm names.** On 22.0.368 the Grid SOP is `sizex`/`sizey` +
+  `rows`/`cols` (point counts) — it has **no `sizez` and no `divisionsx`**;
+  `sizex`/`sizez`/`divsx` is the **Box** SOP. A knob the skill could not bind is
+  reported under `unresolved_parms`, which means the value was never set.
   Unknown names raise `unknown_parm` with real suggestions - read them and retry.
 - **Piece count is not prim count.** Use `geo_stats` (`piece_count_by_name`),
   because packed/fractured geometry reports one per piece, not one per primitive.

@@ -2,41 +2,105 @@
   "name": "usd-pipeline",
   "version": "1.0.0",
   "description": "Export Houdini SOP geometry to USD and report what landed on disk; Solaris sopimport checks where LOPs are available.",
-  "houdini_versions": ["19.5", "20.0", "20.5", "21.0", "22.0"],
-  "verified_on": ["22.0.368"],
-  "dependencies": ["houdini_skills"],
-  "triggers": ["export this to usd", "roundtrip into solaris", "verify the usd file wrote", "usd asset from houdini"],
+  "houdini_versions": [
+    "19.5",
+    "20.0",
+    "20.5",
+    "21.0",
+    "22.0"
+  ],
+  "verified_on": [
+    "22.0.368"
+  ],
+  "dependencies": [
+    "houdini_skills"
+  ],
+  "triggers": [
+    "export this to usd",
+    "roundtrip into solaris",
+    "verify the usd file wrote",
+    "usd asset from houdini"
+  ],
   "examples": [
     "hython -m houdini_skills.cli usd-pipeline export --json '{\"path\":\"/obj/asm_sop/bevel1\",\"output\":\"C:/temp/asm.usda\",\"container\":\"asm_usd\"}'"
   ],
   "sources": [
-    {"repo": "https://github.com/sideeffects/HoudiniUsdBridge", "license": "Apache-2.0", "used_for": "not merged; it is the official USD-for-Houdini build, not a skill - listed so users know the real dependency for custom USD builds"},
-    {"repo": "https://github.com/HuginStudios/usd_chunks", "license": "Apache-2.0", "used_for": "idea reference for procedural USD authoring; no code copied"},
-    {"repo": "https://github.com/baborub/usd-portal", "license": "MIT", "used_for": "idea reference for any-to-any USD exchange; no code copied"}
+    {
+      "repo": "https://github.com/sideeffects/HoudiniUsdBridge",
+      "license": "Apache-2.0",
+      "used_for": "not merged; it is the official USD-for-Houdini build, not a skill - listed so users know the real dependency for custom USD builds"
+    },
+    {
+      "repo": "https://github.com/HuginStudios/usd_chunks",
+      "license": "Apache-2.0",
+      "used_for": "idea reference for procedural USD authoring; no code copied"
+    },
+    {
+      "repo": "https://github.com/baborub/usd-portal",
+      "license": "MIT",
+      "used_for": "idea reference for any-to-any USD exchange; no code copied"
+    }
   ],
   "actions": {
     "export": {
       "type": "object",
       "properties": {
-        "path": {"type": "string", "description": "SOP node to export"},
-        "output": {"type": "string", "description": ".usd/.usda/.usdc target path"},
-        "container": {"type": "string", "default": "asm_usd"},
-        "frames": {"type": "array", "items": {"type": "number"}},
-        "unpack": {"type": "boolean", "default": false}
-      }
+        "path": {
+          "type": "string",
+          "description": "SOP node to export"
+        },
+        "output": {
+          "type": "string",
+          "description": ".usd/.usda/.usdc target path"
+        },
+        "container": {
+          "type": "string",
+          "default": "asm_usd"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "unpack": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "path"
+      ]
     },
     "verify": {
       "type": "object",
-      "required": ["output"],
-      "properties": {"output": {"type": "string"}}
+      "required": [
+        "output"
+      ],
+      "properties": {
+        "output": {
+          "type": "string"
+        }
+      }
     },
     "sopimport": {
       "type": "object",
       "properties": {
-        "stage": {"type": "string", "default": "/stage"},
-        "path": {"type": "string"},
-        "prim_path": {"type": "string", "default": "/world/asm"}
-      }
+        "stage": {
+          "type": "string",
+          "default": "/stage"
+        },
+        "path": {
+          "type": "string"
+        },
+        "prim_path": {
+          "type": "string",
+          "default": "/world/asm"
+        }
+      },
+      "required": [
+        "path"
+      ]
     }
   }
 }

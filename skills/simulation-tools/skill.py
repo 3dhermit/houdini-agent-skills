@@ -46,7 +46,14 @@ FILECACHE_PARMS = {
 }
 
 
+CATEGORY = "simulation-tools"
+
+
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     s = get_session()
     s.require(SUPPORTED, f"simulation-tools.{action}")
     return _HANDLERS[action](s, payload)

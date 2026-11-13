@@ -16,9 +16,21 @@ LOP types. That is the process working, not a typo.
 | fact | detail |
 |---|---|
 | version | `hou.applicationVersion()` -> `(22, 0, 368)`, `hou.applicationVersionString()` -> `'22.0.368'`, `hou.isApprentice()` -> `False`. **`hou.version()`, `hou.applicationVersionTuple()`, `hou.applicationBuild()`, `hou.licenseManager()` do not exist** in `hython`. |
-| node lookup | `hou.node(path)`. **There is no `hou.glob()` and no `hou.hpys()`.** Use `hou.node("/").allChildren()` and match with `fnmatch`. |
+| node lookup | `hou.node(path)`. **There is no `hou.glob()` and no `hou.hpys()`.** Use `hou.node("/")` with **`allSubChildren()`** for the whole file (see below) and match with `fnmatch`. |
 | frame range | `hou.playbar` is an **object, not callable**: `hou.playbar.frameRange()` -> `[1, 240]`, `hou.playbar.setFrameRange(start, end)`. **`hou.setFrameRange()`, `hou.playbackBarMinFrame()` and `hou.fetchGlobalSetup()` do not exist.** `hou.frame()` / `hou.setFrame()` do. |
 | node types | `hou.objNodeTypeCategory().nodeTypes()`, `hou.sopNodeTypeCategory()`, `hou.ropNodeTypeCategory()`, `hou.lopNodeTypeCategory()`, `hou.dopNodeTypeCategory()`. `hou.networkNodeTypeCategory()` **does not exist**. From a node: `node.childTypeCategory().nodeTypes()`. |
+
+## Walking the node tree
+
+`hou.Node` has **no `allChildren()`** - the recursive call is **`allSubChildren()`**
+(verified on 22.0.368, and Python even suggests it: `Did you mean: 'allSubChildren'?`).
+The obvious `children()` fallback only returns one level, which is the dangerous
+kind of wrong: `find("/obj/geo/*")` returns nothing instead of failing, and
+cleanup patterns like `/obj/asmtest_*/bevel1` silently delete nothing.
+
+A handle can also go dead mid-walk: after `destroy()` on a parent, the child
+objects `allSubChildren()` returned raise `hou.ObjectWasDeleted` on `.path()`.
+Read the path before destroying and skip handles that are already dead.
 
 ## Nodes and parms
 
@@ -72,9 +84,9 @@ available list. `karma_xpu` was never a node type.
 
 | node | verified parms |
 |---|---|
-| `grid` | `sizex`, `sizez`, `divisionsx`, `divisionsz` (**not** `sx`/`sz`/`rows`/`cols`) |
-| `box` | `sizex`, `sizey`, `sizez`, `divisionsx`, `divisionsy`, `divisionsz` |
-| `polybevel` | width is **`offset`** (plus `offsetedges`, `offsetpoints`, `useoffsetscale`) - **no `bevelamount`, `width` or `size`** |
+| `grid` | `sizex`, `sizey`, `rows`, `cols`, `tx`/`ty`/`tz`, `rx`/`ry`/`rz`, `orient`, `surftype`, `type` (`poly`, `mesh`, `nurbs`, `bezier`, `points`, `polysoup`, `prim`), `orderu`/`orderv`, `interpu`/`interpv` - **there is NO `sizez` and NO `divisionsx`/`divisionsz`**. A default Grid sits in the **XZ plane at y=0**, so `sizey` is the Z extent (probe: `sizex=4 sizey=2` -> x [-2,2], z [-1,1]). `cols`/`rows` are **point counts**: `cols` subdivides along X, `rows` along Z (probe: `cols=5 rows=3` -> 5 distinct x, 3 distinct z, 8 quads). Default is 10x10 points = 81 quads |
+| `box` | `sizex`, `sizey`, `sizez`, **`divsx`/`divsy`/`divsz`**, `dodivs`, `scale`, `tx`/`ty`/`tz`, `rx`/`ry`/`rz`, `type`, `surftype`, `rebar`, `consolidatepts`, `orientedbbox`, `vertexnormals`, `orderrate1-3`, `divrate1-3` - **no `divisionsx`** (`sizex=2 sizey=4 sizez=6` -> bbox (-1,-2,-3)-(1,2,3), 6 prims) |
+| `polybevel` (type name `polybevel::3.0`) | width is **`offset`** (plus `offsetedges`, `offsetpoints`, `useoffsetscale`) - **no `bevelamount`, `width` or `size`** |
 | `scatter::2.0` | `npts`, `seed`, `generateby`, `usemaxradius`, `maxradius`, `relaxpoints`, `relaxiterations`, `emergencylimit`, `group`, `pointattribs`, `primattribs`, `densityattrib` - **no `perpoint`, `mindist`, `usedist`, `poisson`, `number`** |
 | `copytopoints::2.0` | `pack`, `pivot`, `transform`, `targetattribs`, `sourcegroup`, `sourcegrouptype`, `targetgroup`, `idattrib`, `resettargetattribs`, `viewportlod` - **no `pastepoints`, `pasteprims`** |
 | `attribwrangle` | `snippet`; class parm is `class` with menu values `detail`, `primitive`, `point`, `vertex`, `number` |

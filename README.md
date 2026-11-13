@@ -47,7 +47,8 @@ python -m houdini_skills.cli --schema sop-automation
 
 Every call returns one JSON object: `{"ok": true, ...}` or
 `{"ok": false, "error": {"kind", "message", "hint", "source", "details"}}`.
-Exit code 0 on success, 1 on a structured error, 2 on CLI misuse.
+Exit code 0 on success, 1 on any structured error (bad payload, unknown skill or
+action, no Houdini, failed skill), 2 on argparse misuse.
 
 ## The three rules this repo exists to enforce
 

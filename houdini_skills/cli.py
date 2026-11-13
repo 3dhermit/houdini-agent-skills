@@ -3,9 +3,11 @@
     hython -m houdini_skills.cli sop-automation grid_bevel \
         --json '{"size": [4, 0, 4], "bevel": 0.05}'
     python -m houdini_skills.cli --list
-    python -m houdini_skills.cli schema sop-automation
+    python -m houdini_skills.cli --schema sop-automation
 
-Exit code 0 on ok:true, 1 on a structured error, 2 on CLI misuse.
+Exit code 0 on ok:true. Exit code 1 for any structured error - a bad --json
+payload, an unknown skill or action, a missing Houdini, or a failed skill.
+Exit code 2 is argparse misuse (unknown flag, missing argument).
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import sys
 
 from .errors import SkillFailure
 from .registry import discover, run_skill
+from .versions import HoudiniNotAvailable
 
 
 def _read_payload(args) -> dict:
@@ -66,6 +69,16 @@ def main(argv=None) -> int:
         result = run_skill(args.skill, args.action, _read_payload(args))
     except SkillFailure as exc:
         print(json.dumps(exc.to_result(), indent=2 if args.pretty else None))
+        return 1
+    except HoudiniNotAvailable as exc:
+        # Expected when a scene action is called from a system interpreter. This
+        # is not an unexpected failure, so no traceback: the message IS the fix.
+        print(json.dumps({"ok": False, "error": {
+            "kind": "houdini_unavailable", "message": str(exc),
+            "hint": "run under <install>/bin/hython, or call an action that needs no "
+                    "Houdini: --list, --schema, vex-helper lint, troubleshooting "
+                    "hou_lookup/explain_error", "source": "cli",
+            "recovered": False}}, indent=2 if args.pretty else None))
         return 1
     except Exception as exc:  # unexpected -> still structured
         print(json.dumps({"ok": False, "error": {"kind": type(exc).__name__,

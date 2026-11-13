@@ -423,30 +423,54 @@ class Session:
         return set()
 
     def _all_nodes(self) -> list:
-        """Every node in the file. hou has NO hou.glob() - this is the walk."""
+        """Every node in the file, recursively.
+
+        hou has NO hou.glob(), and hou.Node has NO allChildren() - the recursive
+        call is **allSubChildren()** (verified on 22.0.368). The obvious fallback,
+        children(), returns only one level, which silently made find() report
+        zero matches for anything inside /obj/geo. The manual queue walk below is
+        the fallback for a build without allSubChildren(), not for speed.
+        """
         world = self.hou.node("/")
-        for getter in (lambda: world.allChildren(), lambda: world.children()):
+        try:
+            return list(world.allSubChildren())
+        except Exception:
+            pass
+        found, queue = [], [world]
+        while queue:
+            node = queue.pop()
             try:
-                return list(getter())
+                kids = list(node.children())
             except Exception:
-                continue
-        return []
+                kids = []
+            for kid in kids:
+                found.append(kid)
+                queue.append(kid)
+        return found
 
     def destroy_matching(self, pattern: str) -> list:
-        """Delete every node whose path matches a fnmatch pattern. Returns paths."""
+        """Delete every node whose path matches a fnmatch pattern. Returns paths.
+
+        The path is read BEFORE destroy(): a hou.Node can raise ObjectWasDeleted
+        afterwards, which would silently report zero deletions (KB entry
+        hou-objectwasdeleted).
+        """
         import fnmatch
         killed = []
         for n in self._all_nodes():
-            if fnmatch.fnmatch(n.path(), pattern):
+            try:
+                path = n.path()
+            except Exception:
+                # A handle can already be dead: destroying a parent invalidates
+                # the child objects the walk returned. Skip, do not crash.
+                continue
+            if fnmatch.fnmatch(path, pattern):
                 try:
                     n.destroy()
-                    killed.append(n.path())
+                    killed.append(path)
                 except Exception:
                     pass
         return killed
-
-    def _glob_fallback(self, pattern: str):
-        return []
 
     def _nearby(self, path: str) -> str:
         parent = os.path.dirname(path) or "/"

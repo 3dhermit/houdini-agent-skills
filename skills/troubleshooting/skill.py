@@ -167,6 +167,19 @@ KNOWLEDGE_BASE = [
                     "test_wrangle_sop_type_name",
     },
     {
+        "id": "hou-no-allchildren",
+        "match": r"has no attribute '?allChildren'?|ObjectWasDeleted",
+        "cause": "hou.Node has no allChildren(); the recursive call is allSubChildren(). "
+                 "children() exists but is one level deep, so a node search or cleanup "
+                 "pattern under /obj/geo returns nothing instead of failing. Separately, "
+                 "a node handle read after destroy() raises ObjectWasDeleted.",
+        "fix": "Use hou.node('/').allSubChildren(); read node.path() before destroy() and "
+               "skip handles that are already dead.",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (hython suggests allSubChildren); locked by "
+                    "tests/test_tier_b.py::TestVerifiedApiFacts.test_node_walk_uses_allsubchildren",
+    },
+    {
         "id": "unresolved-knob-names",
         "match": r"unresolved_knobs",
         "cause": "The skill asked for parm names that do not exist on this build. Common false "
@@ -193,7 +206,14 @@ EMPTY_GEO_CHECKS = [
 ]
 
 
+CATEGORY = "troubleshooting"
+
+
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     if action in ("hou_lookup", "explain_error"):
         return _HANDLERS[action](None, payload)
     s = get_session()

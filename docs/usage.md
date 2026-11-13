@@ -45,8 +45,10 @@ you are looking at rather than a throwaway one.
                         "recovered": false, "details": {"candidates_tried": {"scale": [...]}}}}
 ```
 
-Exit codes: `0` ok, `1` structured error (the JSON on stdout is the payload),
-`2` CLI misuse (bad JSON, unknown skill or action).
+Exit codes (locked by `tests/test_tier_a.py::TestCliContract`): `0` ok, `1` any
+structured error - bad `--json`, unknown skill or action, a missing Houdini, or a
+failed skill (the JSON on stdout is the payload), `2` argparse misuse (unknown
+flag, missing argument).
 
 ## Running the tests
 

@@ -124,7 +124,14 @@ _ATTR_SIGIL = re.compile(r"(?P<prefix>\b[fivsc4m]?@|(?<![fivsc4m@])@)(?P<name>[A
 _PAIRS = {"(": ")", "{": "}", "[": "]"}
 
 
+CATEGORY = "vex-helper"
+
+
 def run(action: str, payload: dict) -> dict:
+    # prepare() validates and fills schema defaults, so a direct skill.run()
+    # behaves exactly like a CLI call through run_skill().
+    from houdini_skills.registry import prepare
+    payload = prepare(CATEGORY, action, payload)
     handler = _HANDLERS[action]
     if action in ("validate",):
         from houdini_skills.hou_api import get_session
