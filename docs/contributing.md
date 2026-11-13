@@ -38,9 +38,11 @@ The gate every skill must pass:
   touches a scene.
 
 CI fails on: a declared action with no handler, a missing `SKILL.md`, a
-`meta.json` missing required keys, an out-of-date `SKILL_REGISTRY.md`
-(regenerate with `python tools/make_registry.py`), and unlicensed sources marked
-as used.
+`meta.json` missing required keys or actions, an out-of-date
+`SKILL_REGISTRY.md` (regenerate with `python tools/make_registry.py`), and a
+merged source whose licence is not on the allow-list
+(`python tools/check_skills.py` runs both tree checks; directories starting with
+`_` or `.` under `skills/` are not skills).
 
 ## Versioning
 

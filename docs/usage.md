@@ -55,9 +55,12 @@ flag, missing argument).
 ```bash
 python -m unittest discover -s tests -p "test_tier_a*.py" -v
 "<Houdini>/bin/hython" -m unittest discover -s tests -p "test_tier_b*.py" -v
+python tools/make_registry.py --check     # SKILL_REGISTRY.md matches meta.json
+python tools/check_skills.py              # every skill complete, licences audited
 ```
 
 Tier B skips cleanly when `hou` is missing, so one command works everywhere.
+Run all four before pushing; they are exactly what CI runs.
 
 ## Getting Tier B into CI honestly
 
@@ -74,10 +77,19 @@ To light it up, point a machine that already has a licensed Houdini at the repo:
 2. Add the label `houdini` to the runner.
 3. Set `HYTHON` in the runner environment to the hython binary, e.g.
    `C:/Program Files/Side Effects Software/Houdini 22.0.368/bin/hython.exe`.
+4. Set the repository variable `TIER_B_RUNNER=true`
+   (Settings -> Secrets and variables -> Actions -> Variables).
 
-If no labelled runner is online the job does not run. That is a **coverage gap,
-not a pass** - CI deliberately does not pretend otherwise, and the tier A job is
-the only gate every PR actually sees.
+The variable is the switch, and it exists because of how Actions behaves: a
+`runs-on: [self-hosted, houdini]` job with no matching runner does not fail and
+does not skip - it **queues forever**, so the run never turns red *or* green and
+the real signal gets buried. With the variable unset the job is skipped and the
+Tier A jobs are the visible gate. With it set and no runner online, the queue
+hang is a configuration fault you are meant to see.
+
+Until someone wires up such a runner, Tier B coverage here is **local only**:
+`hython -m unittest` on a licensed machine. That is a coverage gap, not a pass,
+and the release notes for each tag say so.
 
 ## Version reality
 

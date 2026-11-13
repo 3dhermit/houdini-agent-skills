@@ -85,8 +85,11 @@ plus a licence redeem code. So the split is deliberate:
 | A | GitHub Actions on every PR | schemas, version gating, VEX static lint, registry/metadata hygiene, error envelope |
 | B | your machine or a self-hosted runner with Houdini | real cooks, real parm binding, real files on disk |
 
-CI marks the integration job `pass if no houdini-labelled runner is online`, and
-`docs/usage.md` explains how to attach one. Tests are stdlib `unittest` so they
+The integration job is gated on a repository variable (`TIER_B_RUNNER=true`) and
+only runs on a runner labelled `houdini`; with no such runner attached, Tier B
+coverage is **local only**, which is a gap we state rather than paper over.
+`docs/usage.md` explains how to attach one and why an ungated self-hosted job
+just queues forever instead of passing. Tests are stdlib `unittest` so they
 run inside Houdini's own Python with **no pip installs** - hython's interpreter
 is not the Python you pip into.
 

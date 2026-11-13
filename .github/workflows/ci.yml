@@ -32,49 +32,23 @@ jobs:
       - name: Registry is generated, not hand-edited
         run: |
           python tools/make_registry.py --check
-      - name: Every skill has SKILL.md + meta.json + skill.py
-        run: |
-          python - <<'PY'
-          import os, sys
-          need = ("SKILL.md", "meta.json", "skill.py")
-          bad = []
-          for entry in sorted(os.listdir("skills")):
-              d = os.path.join("skills", entry)
-              if not os.path.isdir(d):
-                  continue
-              for f in need:
-                  if not os.path.isfile(os.path.join(d, f)):
-                      bad.append(f"{entry}/{f}")
-          if bad:
-              print("missing:", *bad, sep="\n  ")
-              sys.exit(1)
-          print("all skills complete")
-          PY
-      - name: No unlicensed third-party code merged
-        run: |
-          python - <<'PY'
-          import json, os, sys
-          offenders = []
-          for entry in sorted(os.listdir("skills")):
-              meta_path = os.path.join("skills", entry, "meta.json")
-              if not os.path.isfile(meta_path):
-                  continue
-              meta = json.load(open(meta_path, encoding="utf-8"))
-              for src in meta.get("sources", []):
-                  lic = (src.get("license") or "").lower()
-                  used = (src.get("used_for") or "").lower()
-                  if ("none" in lic or "no license" in lic) and "nothing" not in used:
-                      offenders.append(f"{entry}: {src.get('repo')} ({lic})")
-          if offenders:
-              print("no-licence sources must be marked used_for=NOTHING:",
-                    *offenders, sep="\n  ")
-              sys.exit(1)
-          print("licence audit clean")
-          PY
+      - name: Skill tree is complete and licence-audited
+        # One implementation in the repo (tools/check_skills.py), covered by a
+        # tier A test - CI used to inline this walk and counted skills/__pycache__
+        # as a skill folder, which failed the v1.0.0 tag push on all three Pythons.
+        run: python tools/check_skills.py
 
   tier-b:
     name: Tier B (real Houdini, self-hosted)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # vars.TIER_B_RUNNER is a repository variable (Settings -> Secrets and
+    # variables -> Variables, set it to "true" on a machine that registers a
+    # self-hosted runner labelled `houdini`). Unset means skip: a runs-on label
+    # with no matching runner never starts and never fails, it just queues
+    # forever, which makes the whole run unreadable and hides real red.
+    if: >
+      vars.TIER_B_RUNNER == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, houdini]
     continue-on-error: false
     timeout-minutes: 30

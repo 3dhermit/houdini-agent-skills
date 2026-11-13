@@ -226,5 +226,87 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class TestSkillTreeCheck(unittest.TestCase):
+    """tools/check_skills.py is what CI runs; it has to be right, not just green.
+
+    Regression for the v1.0.0 tag push (2026-11-13): the same walk existed as a
+    heredoc in ci.yml, where skills/__pycache__ - created by an earlier build
+    step - was counted as a skill folder and failed all three Tier A jobs.
+    """
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _tool(self):
+        path = os.path.join(self.ROOT, "tools", "check_skills.py")
+        spec = importlib.util.spec_from_file_location("check_skills", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _tree(self, tmp, name, *, complete=True, sources=None):
+        d = os.path.join(tmp, name)
+        os.makedirs(d)
+        if complete:
+            with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+                fh.write("# skill\n")
+            with open(os.path.join(d, "skill.py"), "w", encoding="utf-8") as fh:
+                fh.write("def run(a, p):\n    return {}\n")
+        with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+            json.dump({"name": name, "actions": {"go": {"description": "x"}},
+                       "sources": sources or []}, fh)
+        return d
+
+    def test_caches_and_hidden_dirs_are_not_skills(self):
+        import tempfile
+        tool = self._tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._tree(tmp, "good-skill")
+            os.makedirs(os.path.join(tmp, "__pycache__"))
+            with open(os.path.join(tmp, "__pycache__", "x.pyc"), "wb") as fh:
+                fh.write(b"\x00")
+            os.makedirs(os.path.join(tmp, ".vcs"))
+            self.assertEqual(tool.check_complete(tmp), [])
+            self.assertEqual(tool.check_licences(tmp), [])
+            self.assertEqual(len(tool.candidate_dirs(tmp)), 1)
+
+    def test_incomplete_skill_is_named(self):
+        import tempfile
+        tool = self._tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._tree(tmp, "half-skill", complete=False)
+            problems = tool.check_complete(tmp)
+            self.assertEqual(len(problems), 1)
+            self.assertIn("half-skill", problems[0])
+            self.assertIn("SKILL.md", problems[0])
+
+    def test_non_permissive_source_is_an_offender(self):
+        import tempfile
+        tool = self._tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._tree(tmp, "skill-a", sources=[{"repo": "x/y", "license": None,
+                                                 "used_for": "code"}])
+            self._tree(tmp, "skill-b", sources=[{"repo": "x/z", "license": None,
+                                                 "used_for": "NOTHING (reviewed)"}])
+            offenders = tool.check_licences(tmp)
+            self.assertEqual(len(offenders), 1, "the reviewed-and-unused entry "
+                                                "must not be flagged")
+            self.assertIn("x/y", offenders[0])
+
+    def test_the_real_tree_passes_with_caches_present(self):
+        """Exactly the CI condition: the walk runs after something imported skills/."""
+        import tempfile
+        tool = self._tool()
+        cache = os.path.join(self.ROOT, "skills", "__pycache__")
+        os.makedirs(cache, exist_ok=True)
+        try:
+            self.assertEqual(tool.check_complete(os.path.join(self.ROOT, "skills")), [])
+            self.assertEqual(tool.check_licences(os.path.join(self.ROOT, "skills")), [])
+            self.assertEqual(tool.main([os.path.join(self.ROOT, "skills")]), 0)
+        finally:
+            for f in os.listdir(cache):
+                os.remove(os.path.join(cache, f))
+            os.rmdir(cache)
+
+
 if __name__ == "__main__":
     unittest.main()
