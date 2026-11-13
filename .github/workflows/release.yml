@@ -47,26 +47,49 @@ jobs:
             -x '.git/*' 'dist/*' '*__pycache__/*'
           sha256sum dist/* > "dist/checksums-${TAG}.txt"
 
-      - name: Release notes from the generated registry
+      - name: Release notes
         run: |
-          {
-            echo "## houdini-agent-skills ${TAG}"
-            echo
-            echo "Skills, actions and curation sources (generated):"
-            echo
-            cat SKILL_REGISTRY.md
-          } > release-notes.md
+          # Curated notes win: docs/releases/<tag>.md is the human-written summary
+          # (skills, supported versions, known limitations). The generated registry
+          # is appended so the two can never disagree silently.
+          if [ -f "docs/releases/${TAG}.md" ]; then
+            cp "docs/releases/${TAG}.md" release-notes.md
+            {
+              echo
+              echo "## Appendix: generated skill registry"
+              echo
+              cat SKILL_REGISTRY.md
+            } >> release-notes.md
+          else
+            {
+              echo "## houdini-agent-skills ${TAG}"
+              echo
+              echo "Skills, actions and curation sources (generated):"
+              echo
+              cat SKILL_REGISTRY.md
+            } > release-notes.md
+          fi
 
-      - name: Create the GitHub release
+      - name: Create or refresh the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" \
-            --title "houdini-agent-skills $TAG" \
-            --notes-file release-notes.md \
+          # Idempotent, so re-running this workflow (or moving a tag) never dies on
+          # "a release with the same tag name already exists".
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "houdini-agent-skills $TAG" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG" \
+              --title "houdini-agent-skills $TAG" \
+              --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" \
             dist/houdini-agent-skills-"$TAG".tar.gz \
             dist/houdini-agent-skills-"$TAG".zip \
-            dist/checksums-"$TAG".txt
+            dist/checksums-"$TAG".txt \
+            --clobber
 
       - uses: actions/upload-artifact@v4
         with:
