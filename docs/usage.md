@@ -1,0 +1,85 @@
+# Usage
+
+## Calling a skill
+
+Two hosts, same interface.
+
+**System Python (no Houdini running)** - inventory, schemas, static VEX lint,
+error diagnosis. Anything that needs a live scene raises `houdini_unavailable`:
+
+```bash
+python -m houdini_skills.cli --list
+python -m houdini_skills.cli --schema vex-helper
+python -m houdini_skills.cli vex-helper lint --json '{"code":"double x = 1;"}'
+python -m houdini_skills.cli troubleshooting diagnose --json '{"message":"Error: The following node type is not registered: pyro"}'
+```
+
+**Houdini's own Python (`hython`)** - everything, including real cooks:
+
+```bash
+"<Houdini>/bin/hython" -m houdini_skills.cli sop-automation grid_bevel \
+  --json '{"container":"demo","size":[4,0,4],"divisions":12,"bevel_width":0.08}'
+"<Houdini>/bin/hython" -m houdini_skills.cli vex-helper validate --json '{"template":"all"}'
+"<Houdini>/bin/hython" -m houdini_skills.cli simulation-tools rbd_fall \
+  --json '{"container":"rbd_demo","seed":7,"pieces":40,"height":3,"drop":1.0,"frames":[1,100]}'
+```
+
+Run `hython` from the repo root, or put the repo on `PYTHONPATH`:
+
+```bash
+export PYTHONPATH="$PWD"
+"<Houdini>/bin/hython" -m houdini_skills.cli rendering configure \
+  --json '{"engine":"karma_cpu","output_path":"/show/$HIPNAME/beauty.$F4.exr","samples":128,"frames":[1,24]}'
+```
+
+Inside a running Houdini GUI, `hou` is already imported and connected to your
+session - `Session.open()` attaches to it, so a skill can operate on the scene
+you are looking at rather than a throwaway one.
+
+## Output contract
+
+```json
+{"ok": true,  "action": "...", "category": "...", "houdini": "22.0.368", "...": "..."}
+{"ok": false, "error": {"kind": "unresolved_knobs", "message": "...",
+                        "hint": "readable parms: ...", "source": "sop-automation",
+                        "recovered": false, "details": {"candidates_tried": {"scale": [...]}}}}
+```
+
+Exit codes: `0` ok, `1` structured error (the JSON on stdout is the payload),
+`2` CLI misuse (bad JSON, unknown skill or action).
+
+## Running the tests
+
+```bash
+python -m unittest discover -s tests -p "test_tier_a*.py" -v
+"<Houdini>/bin/hython" -m unittest discover -s tests -p "test_tier_b*.py" -v
+```
+
+Tier B skips cleanly when `hou` is missing, so one command works everywhere.
+
+## Getting Tier B into CI honestly
+
+GitHub-hosted runners **cannot install Houdini**: SideFX publishes no public
+installer action for the hosted fleet, and an apprentice/non-commercial install
+needs a SideFX account and a licence redeem code, which a shared runner may not
+hold. So `ci.yml` splits the tiers and the integration job targets
+`runs-on: [self-hosted, houdini]`.
+
+To light it up, point a machine that already has a licensed Houdini at the repo:
+
+1. On that machine, install the Actions runner for the repo
+   (Settings -> Actions -> Runners -> New self-hosted runner).
+2. Add the label `houdini` to the runner.
+3. Set `HYTHON` in the runner environment to the hython binary, e.g.
+   `C:/Program Files/Side Effects Software/Houdini 22.0.368/bin/hython.exe`.
+
+If no labelled runner is online the job does not run. That is a **coverage gap,
+not a pass** - CI deliberately does not pretend otherwise, and the tier A job is
+the only gate every PR actually sees.
+
+## Version reality
+
+The floor is 19.5 by declaration; every skill's `verified_on` field records what
+has actually been run. Today that is `22.0.368` only. `docs/verified-api.md`
+lists the API facts proven on that build, which is where the parm-name and
+node-type tables came from.

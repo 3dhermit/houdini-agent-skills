@@ -1,0 +1,53 @@
+{
+  "name": "vex-helper",
+  "version": "1.0.0",
+  "description": "Generate VEX from intent, lint it without Houdini, and compile-check it for real by cooking an Attribute Wrangle.",
+  "houdini_versions": ["19.5", "20.0", "20.5", "21.0", "22.0"],
+  "verified_on": ["22.0.368"],
+  "dependencies": ["houdini_skills"],
+  "triggers": [
+    "write VEX for", "displace points with noise", "scatter by slope",
+    "is this VEX valid", "volume density VEX", "curl noise velocity"
+  ],
+  "examples": [
+    "python -m houdini_skills.cli vex-helper list_templates --json '{}'",
+    "hython -m houdini_skills.cli vex-helper validate --json '{\"template\":\"point_displacement_noise\"}'"
+  ],
+  "sources": [
+    {"repo": "https://github.com/healkeiser/fxhoudinimcp", "license": "MIT", "used_for": "naming parity with its create_wrangle/validate_vex tools; independent implementation"},
+    {"repo": "https://github.com/Kuchavo/Houdini-VEX-Snippets", "license": "none (all rights reserved)", "used_for": "NOTHING - not merged, cited only as evidence the category is in demand"},
+    {"repo": "https://github.com/stevedatelier/Houdini-Simulations", "license": "none (all rights reserved)", "used_for": "NOTHING - not merged, cited only"}
+  ],
+  "actions": {
+    "list_templates": {"type": "object", "properties": {}},
+    "template": {
+      "type": "object",
+      "required": ["template"],
+      "properties": {
+        "template": {"type": "string"},
+        "wrangle_kind": {"type": "string", "enum": ["point", "prim", "detail", "volume"], "default": "point"},
+        "overrides": {"type": "object", "default": {}}
+      }
+    },
+    "lint": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {"code": {"type": "string", "minLength": 1}}
+    },
+    "validate": {
+      "type": "object",
+      "properties": {
+        "code": {"type": "string"},
+        "template": {"type": "string"},
+        "wrangle_kind": {"type": "string", "enum": ["point", "prim", "detail", "volume"], "default": "point"},
+        "container": {"type": "string", "default": "asm_vexcheck"},
+        "keep": {"type": "boolean", "default": false}
+      }
+    },
+    "explain": {
+      "type": "object",
+      "required": ["template"],
+      "properties": {"template": {"type": "string"}}
+    }
+  }
+}

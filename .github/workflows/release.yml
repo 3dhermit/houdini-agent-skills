@@ -1,0 +1,74 @@
+name: Release
+
+# Packages the whole skill repo when a version tag is pushed.
+# Tag format enforced: vMAJOR.MINOR.PATCH (see README for the versioning rules).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the tag is a semver release tag
+        # SECURITY: GITHUB_REF_NAME is a runner env var, not a ${{ }} expression
+        # interpolated into the shell. It is regex-validated before being re-exported
+        # as TAG, and every later use is "$TAG" quoted. No untrusted ${{ }} in run.
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag '$tag' must look like v1.0.0" >&2
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Gate the release on tier A
+        run: |
+          python -m compileall -q houdini_skills skills tests tools
+          python -m unittest discover -s tests -p "test_tier_a*.py"
+          python tools/make_registry.py --check
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf "dist/houdini-agent-skills-${TAG}.tar.gz" \
+            --exclude=.git --exclude=dist --exclude=__pycache__ .
+          zip -qr "dist/houdini-agent-skills-${TAG}.zip" . \
+            -x '.git/*' 'dist/*' '*__pycache__/*'
+          sha256sum dist/* > "dist/checksums-${TAG}.txt"
+
+      - name: Release notes from the generated registry
+        run: |
+          {
+            echo "## houdini-agent-skills ${TAG}"
+            echo
+            echo "Skills, actions and curation sources (generated):"
+            echo
+            cat SKILL_REGISTRY.md
+          } > release-notes.md
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --title "houdini-agent-skills $TAG" \
+            --notes-file release-notes.md \
+            dist/houdini-agent-skills-"$TAG".tar.gz \
+            dist/houdini-agent-skills-"$TAG".zip \
+            dist/checksums-"$TAG".txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/

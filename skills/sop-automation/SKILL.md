@@ -1,0 +1,51 @@
+---
+name: sop-automation
+description: Use when building or inspecting Houdini SOP networks - create nodes, wire chains, set parms, read geometry counts. Version-gated to Houdini 19.5+.
+houdini_versions: 19.5 - 22.0
+verified_on: 22.0.368
+---
+
+# SOP automation
+
+One shape for every SOP edit: validate JSON in, call the shared `hou` wrapper,
+structured JSON out. You never touch `hou` directly from the agent side.
+
+## When to trigger
+"create a grid and bevel it", "wire these nodes", "set parms on /obj/geo/sphere",
+"how many pieces is this?", "what is in this network".
+
+## Actions
+| action | payload | returns |
+|---|---|---|
+| `grid_bevel` | `container, size, divisions, bevel_width` | created paths, which parm names bound, cook status, geometry stats |
+| `create_node` | `node_type, name, parent` | node ref |
+| `chain` | `types[], names[], parent` | nodes + wiring list |
+| `set_parms` | `path, parms{}` | applied map (unknown parm name -> error with suggestions) |
+| `read_parms` | `path, names[]` | raw parm values |
+| `find` | `pattern, limit` | matching node refs |
+| `geo_stats` | `path` | prims, points, packed count, pieces by `@name`, bounds |
+| `delete_node` | `path, confirm=path` | deletion receipt (confirm is mandatory) |
+| `list_types` | `parent, contains` | valid node type names for that network |
+
+## How to call
+```bash
+hython -m houdini_skills.cli sop-automation grid_bevel \
+  --json '{"container":"asm_demo","size":[4,0,4],"divisions":12,"bevel_width":0.08}'
+```
+
+## Rules that keep you out of trouble
+- **Never guess parm names.** H22 Grid uses `sizex`/`sizez`, not `sx`/`sy`/`sz`.
+  Unknown names raise `unknown_parm` with real suggestions - read them and retry.
+- **Piece count is not prim count.** Use `geo_stats` (`piece_count_by_name`),
+  because packed/fractured geometry reports one per piece, not one per primitive.
+- **Set the display flag** on the chain output (`grid_bevel` does this) or an
+  Object Merge downstream pulls the wrong geometry.
+- Deleting needs `confirm` equal to the path. There is no bulk delete in v1.
+
+## Failure modes
+| error kind | what it means | do this |
+|---|---|---|
+| `unknown_node_type` | wrong category or renamed type | use `list_types` |
+| `unknown_parm` | renamed/misremembered parm | take the suggestion |
+| `cook_errors` | node is red | hand off to the `troubleshooting` skill |
+| `unsupported_version` | below 19.5 floor | stop, tell the user |

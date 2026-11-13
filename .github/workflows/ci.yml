@@ -1,0 +1,91 @@
+name: CI
+
+# Tier A runs everywhere. Tier B needs a real Houdini, which GitHub-hosted
+# runners cannot legally provide - so the integration job only runs on a
+# self-hosted runner labelled `houdini`, and passes when none is online.
+# See docs/usage.md for the licensing reason and how to attach a runner.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  tier-a:
+    name: Tier A (no Houdini) - py${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile every source file
+        run: |
+          python -m compileall -q houdini_skills skills tests tools
+      - name: Run tier A tests
+        run: python -m unittest discover -s tests -p "test_tier_a*.py" -v
+      - name: Registry is generated, not hand-edited
+        run: |
+          python tools/make_registry.py --check
+      - name: Every skill has SKILL.md + meta.json + skill.py
+        run: |
+          python - <<'PY'
+          import os, sys
+          need = ("SKILL.md", "meta.json", "skill.py")
+          bad = []
+          for entry in sorted(os.listdir("skills")):
+              d = os.path.join("skills", entry)
+              if not os.path.isdir(d):
+                  continue
+              for f in need:
+                  if not os.path.isfile(os.path.join(d, f)):
+                      bad.append(f"{entry}/{f}")
+          if bad:
+              print("missing:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("all skills complete")
+          PY
+      - name: No unlicensed third-party code merged
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          offenders = []
+          for entry in sorted(os.listdir("skills")):
+              meta_path = os.path.join("skills", entry, "meta.json")
+              if not os.path.isfile(meta_path):
+                  continue
+              meta = json.load(open(meta_path, encoding="utf-8"))
+              for src in meta.get("sources", []):
+                  lic = (src.get("license") or "").lower()
+                  used = (src.get("used_for") or "").lower()
+                  if ("none" in lic or "no license" in lic) and "nothing" not in used:
+                      offenders.append(f"{entry}: {src.get('repo')} ({lic})")
+          if offenders:
+              print("no-licence sources must be marked used_for=NOTHING:",
+                    *offenders, sep="\n  ")
+              sys.exit(1)
+          print("licence audit clean")
+          PY
+
+  tier-b:
+    name: Tier B (real Houdini, self-hosted)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, houdini]
+    continue-on-error: false
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate hython
+        run: |
+          if [ -n "$HYTHON" ]; then echo "using $HYTHON"
+          else HYTHON="$(command -v hython || echo /opt/houdini/bin/hython)"; fi
+          echo "HYTHON=$HYTHON" >> "$GITHUB_ENV"
+          "$HYTHON" --version || true
+      - name: Run tier B tests against a live Houdini
+        run: |
+          "$HYTHON" -m unittest discover -s tests -p "test_tier_b*.py" -v

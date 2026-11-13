@@ -1,0 +1,43 @@
+# Houdini / scene artifacts
+*.hip
+*.hipnc
+*.bgeo
+*.bgeo.gz
+*.bgeo.sc
+*.vdb
+*.sim
+*.pic
+*.exr
+*.usd
+*.usda
+*.usdc
+usd/
+opengl/
+saved/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Test scratch
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Houdini session noise
+.hou.conf
+*.dmp
+Houdini.*.dmp
+.core*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+# Normalise line endings so the Linux CI runner and Windows hython see the same
+# bytes (the registry --check gate compares file contents exactly).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.exr binary
+*.hip binary
+*.hipnc binary
+*.bgeo binary
+*.bgeo.sc binary
+*.usdc binary
+*.vdb binary

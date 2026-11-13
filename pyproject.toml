@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "houdini-agent-skills"
+version = "1.0.0"
+description = "Version-aware, schema-validated agent skills for SideFX Houdini 19.5+, tested against a real Houdini"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["houdini", "agent-skills", "3d-automation", "llm-tools", "sidefx-houdini"]
+
+# Deliberately no runtime dependencies. The package must import inside hython,
+# whose interpreter is not the one you pip into, so the JSON-schema validator is
+# vendored in houdini_skills/schema.py instead of pulling in `jsonschema`.
+dependencies = []
+
+[project.scripts]
+houdini-skills = "houdini_skills.cli:main"
+
+[tool.setuptools]
+packages = ["houdini_skills"]
+
+# skills/* folders carry hyphens and are loaded by file path at runtime
+# (skills/__init__.py), so they ship as data rather than importable packages.
+[tool.setuptools.package-data]
+houdini_skills = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
