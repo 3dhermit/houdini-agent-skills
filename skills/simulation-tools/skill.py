@@ -262,6 +262,7 @@ def _link_solver(solver, dop_path: str) -> dict:
 
 def _cache_sop(s, p):
     """Attach a File Cache SOP below an existing SOP node."""
+    mark = len(s.created)
     target = s.node(p["path"])
     parent = target.parent()
     if parent is None:
@@ -289,8 +290,13 @@ def _cache_sop(s, p):
             applied[knob] = {"parm": name}
     _set_display(s, fc)
     return ok({"file_cache": fc.path(), "applied": applied, "unresolved": unresolved,
+               "created_nodes": s.created[mark:],
+               "written": False,
                "note": "parms reported as unresolved were not set; check the real "
-                       "parm names on this build with read_parms"})
+                       "parm names on this build with read_parms. No cache was "
+                       "written: this only configures the File Cache SOP. Writing is "
+                       "its Output-tab button, whose parm name this skill has not "
+                       "verified - list it with read_parms rather than guessing it"})
 
 
 def _set_frame_range(s, p):

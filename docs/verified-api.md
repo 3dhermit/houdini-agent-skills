@@ -81,12 +81,54 @@ The accessors most 19.5-era scripts use are **gone**:
 So `parm.val()` and `parmTuple.vals()` — the two most common calls in older Houdini
 Python — raise `AttributeError` on this build. Read tuples through `eval()`.
 
+### What `set()` actually keeps (22.0.368)
+
+A successful `set()` call is **not** proof the parm holds your value. Read it back:
+
+| Case | Request | What hou keeps |
+| --- | --- | --- |
+| int parm, fractional value | `grid.rows = 2.7`, `karma.resolutionx = 0.5` | raises `TypeError: Cannot set an int parm to a fractional value` — it does not round |
+| int parm, integral float | `karma.resolutionx = 64.0` | `64` |
+| number below the parm's minimum | `grid.rows = -5`, `grid.rows = 0`, `karma.samplesperpixel = 0` | `1` — clamped, **no error** |
+| float parm, negative | `grid.sizex = -3` | `-3.0` (allowed, no clamp) |
+| menu parm by index | `karma.trange = 99` | index `3` → `rawValue()` `'stage'` — clamped, no error |
+| menu parm, negative index | `karma.trange = -3` | index `0` → `'off'` |
+| menu parm, in range | `karma.trange = 2` | index `2` → `'on'` |
+
+`Session.set_parms` therefore returns `set` / `kept` / `drift` rather than echoing the
+request, and `sop.set_parms` passes that through. `rawValue()` gives the human label
+(`'stage'`), `eval()` gives the index (`3`) — compare the request against both.
+
 Panes are GUI-only: `hou.ui` **does not exist in hython at all**
 (`module 'hou' has no attribute 'ui'`). In a live GUI it does: `hou.ui.paneTabs()`
 returned 12 tabs and `hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)` returned
 the pane showing `/obj/rbd/rbd_solver1`. Guard pane code with `hasattr(hou, "ui")`.
 
 All of it is locked by `tests/test_tier_b.py::TestHoudini22ApiSpellings`.
+
+### Wiring and input inspection (22.0.368)
+
+`hou.Node` gives you `inputs()`, `input(i)`, `inputConnections()`,
+`inputConnectors()`, `inputLabels()`, `inputNames()`, `inputsWithIndices()`,
+`numOrderedInputs()`, `insertInput()`, `setInput()`, `setNamedInput()`.
+`hou.SopNode` adds `inputGeometry()`, `inputGeometryAtFrame()`, `inputsAsData()` —
+and **not** the state accessors a 19.5 script expects:
+
+| Guessed | Real on 22.0.368 |
+| --- | --- |
+| `SopNode.inputState(i)` | absent (this repo's own `diagnose_node` crashed on it) |
+| `SopNode.inputOutputState(i)` | absent — the guarded mute check was dead code |
+| `SopNode.inputIsMuted()` / `isInputMuted()` | absent; input mute is not readable via hou here |
+| `SopNode.inputType(i)` | absent |
+| `hou.NodeConnector` | renamed: `hou.NodeConnection` (AttributeError says so); it exposes no mute/state methods |
+| `SopNode.inputLabels()` | present — this is the one that works |
+
+So the usable diagnostic is **cook each input and count prims**
+(`len(inp.geometry().prims())`): a `0` or `None` localises where geometry died, which
+is what a mute-state guess was standing in for.
+
+`Session.find()` matches **paths with fnmatch** (`/obj/asm*`, `/out/*usd*`), not
+substrings — `find("asm_l5")` correctly returns nothing; write `/obj/asm_l5*/*`.
 
 ### Hip-file state
 
@@ -115,6 +157,41 @@ The category accessor is `hou.nodeTypeCategories()` — there is no
 `hou.categoryAllAsDictionary()`. The categories on 22.0.368 are: `Chop`, `ChopNet`,
 `Cop`, `Cop2`, `CopNet`, `Data`, `Director`, `Dop`, `Driver`, `Lop`, `Manager`,
 `Object`, `Shop`, `Sop`, `Top`, `TopNet`, `Vop`, `VopNet`.
+
+**Those keys are not the UI labels, and that bites.** The render category is `Driver`,
+not `ROP`: `hou.ropNodeTypeCategory().name()` returns `'Driver'`, so
+`hou.nodeTypeCategories()["ROP"]` raises `KeyError`. Same story for `Sop`/`Object`/`Lop`
+versus SOP/OBJ/LOP — and a SOP *node's* `type().category().name()` is `'Sop'`, so any
+comparison written `== "SOP"` flags every real SOP as the wrong category (this repo's own
+`empty_geo_report` did exactly that until a live run caught it). The accessors differ per
+class, and both are easy to get wrong:
+
+| Class | Exists | Does not exist |
+| --- | --- | --- |
+| `hou.NodeTypeCategory` | `name()` (`Sop`), `label()` (`Geometry`), `typeName()`, `nodeTypes()` | `keyName()`, `internalName()`, `description()` |
+| `hou.NodeType` / `OpNodeType` / `SopNodeType` | `name()` (the internal type name, e.g. `grid`), `description()`, `category()` | `internalName()`, `typeName()`, `label()`, `knownTypeNames()`, `supplements()` |
+
+`label()` is the name of the tab in the UI, which is why the render network is `/out`
+(category `Driver`, label **`Outputs`**) and Solaris is category `Lop`, label
+**`Solaris`**:
+
+| hou key | `label()` | types | hou key | `label()` | types |
+| --- | --- | --- | --- | --- | --- |
+| `Sop` | Geometry | 1693 | `Shop` | Shaders | 219 |
+| `Object` | Objects | 186 | `Top` | Tasks | 183 |
+| `Driver` | **Outputs** | 90 | `Chop` | Motion FX | 149 |
+| `Lop` | **Solaris** | 219 | `Cop2` | Compositing | 169 |
+| `Dop` | Dynamics | 505 | `Cop` | Copernicus | 384 |
+| `Vop` | VEX Builder | 1305 | `Data` | Data | 446 |
+| `TopNet`/`CopNet`/`ChopNet`/`VopNet` | networks | 2/3/1/17 | `Director`/`Manager` | (empty) | 0/0 |
+
+Type counts and the collisions, read off the build:
+
+The two names that bite, spelled out: `karma` is a `Driver` **and** a `Lop` type,
+`filecache` is a `Sop` **and** a `Lop` type, and SOP/LOP share 33 type names — a bare name
+lookup can hand you the wrong node class. `troub.node_type_lookup` answers that with
+`creatable_here` for the network you name (via `node.childTypeCategory()`); `sop.list_types`
+lists only what one network accepts.
 
 Why searching one category lies — `pyro` by category, read off the build:
 

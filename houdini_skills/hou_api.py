@@ -22,6 +22,20 @@ from .errors import SkillFailure, hou_name_error, parse_node_errors, suggest
 from .versions import HoudiniVersion, check_supported, require_hou
 
 
+def _same_value(requested, raw, evaluated) -> bool:
+    """Did the parm keep what was asked? Menu parms report labels in rawValue() and an
+    index in eval(), so both are needed; string parms compare on rawValue() alone."""
+    if isinstance(requested, bool):
+        requested = 1 if requested else 0
+    if isinstance(requested, (int, float)):
+        if isinstance(evaluated, (int, float)):
+            return float(evaluated) == float(requested)
+        return str(evaluated) == str(requested)
+    if isinstance(requested, (list, tuple)):
+        return [str(x) for x in requested] == [str(x) for x in (evaluated or [])]
+    return str(requested) == str(raw)
+
+
 def _parm_names(node) -> set[str]:
     """All parm names on a node, including inside multi-parm tuples.
 
@@ -159,7 +173,23 @@ class Session:
 
     # -- parms -------------------------------------------------------------
     def set_parms(self, path: str, parms: dict) -> dict:
-        """Set parms with name validation. Returns {set: {...}, skipped: {name: suggestions}}."""
+        """Set parms with name validation, then read them back and report the truth.
+
+        Returns {"set": [...], "kept": {name: rawValue}, "drift": {...}}. `kept` is what
+        the parm actually says afterwards, never the value you asked for, because hou
+        does not always honour the request (all verified on 22.0.368):
+
+        * an int parm given a fractional value raises TypeError ("Cannot set an int parm
+          to a fractional value") - it does NOT round: karma.resolutionx = 0.5 raises,
+          while 64.0 is accepted
+        * an out-of-range number is clamped with no error at all: grid.rows = -5 and
+          grid.rows = 0 both end up 1; karma.samplesperpixel = 0 ends up 1
+        * a menu parm takes an index and clamps it silently: karma.trange = 99 lands on
+          index 3 ('stage'), -3 lands on 0 ('off')
+        * a float parm with no range keeps a negative: grid.sizex = -3 stays -3.0
+
+        Echoing the request would let a caller believe a parm it never actually set.
+        """
         n = self.node(path)
         names = _parm_names(n)
         applied, rejected = {}, {}
@@ -177,10 +207,21 @@ class Session:
                     p.set(value)
                 applied[key] = value
             except Exception as exc:
+                # hou's TypeError carries a wall of C++ prototypes after
+                # "Additional information:"; keep the line that explains the failure and
+                # put the rest in details, so agent context is not polluted by SWIG noise.
+                text = str(exc)
+                first = text.split("Additional information:")[0].strip()
+                if "fractional" in text:
+                    hint = ("this parm is an integer on 22.0.368 and hou does not round: "
+                            "pass rows=3, not rows=2.7")
+                else:
+                    hint = f"current value: {p.rawValue()!r}"
                 raise SkillFailure("parm_set_failed",
-                                   f"{path}.{key}: {exc}",
-                                   hint=f"current value: {p.rawValue()!r}",
-                                   details={"parm": key, "value": value})
+                                   f"{path}.{key}: {first}",
+                                   hint=hint,
+                                   details={"parm": key, "value": value,
+                                            "hou_message": text[:400]})
         if rejected:
             raise SkillFailure(
                 "unknown_parm",
@@ -189,7 +230,14 @@ class Session:
                 source="set_parms",
                 details={"rejected": rejected, "applied": applied},
             )
-        return applied
+        kept, drift = {}, {}
+        for key, value in applied.items():
+            p2 = n.parm(key)
+            raw, evaluated = p2.rawValue(), p2.eval()
+            kept[key] = raw
+            if not _same_value(value, raw, evaluated):
+                drift[key] = {"requested": value, "kept": raw, "eval": evaluated}
+        return {"set": sorted(applied), "kept": kept, "drift": drift}
 
     def read_parms(self, path: str, names: list[str] | None = None) -> dict:
         n = self.node(path)

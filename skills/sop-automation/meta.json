@@ -50,7 +50,8 @@
       "required": ["path", "parms"],
       "properties": {
         "path": {"type": "string"},
-        "parms": {"type": "object"}
+        "parms": {"type": "object",
+                  "description": "parm name -> value. The result reads every parm back: `kept` is what the node now says and `drift` lists anything that did not stick. On 22.0.368 an out-of-range number or menu index is clamped with no error (grid.rows=-5 -> 1; karma.trange=99 -> 'stage'), and an int parm raises TypeError on a fractional value (karma.resolutionx=0.5)."}
       }
     },
     "read_parms": {

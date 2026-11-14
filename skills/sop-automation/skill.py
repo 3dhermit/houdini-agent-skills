@@ -92,8 +92,12 @@ def _grid_bevel(s, p):
 
 
 def _set_parms(s, p):
-    applied = s.set_parms(p["path"], p["parms"])
-    return ok({"path": p["path"], "applied": applied})
+    # The wrapper reads every parm back: hou clamps out-of-range numbers and menu
+    # indices silently, so the request is never proof of what the node now says.
+    out = s.set_parms(p["path"], p["parms"])
+    return ok({"path": p["path"], **out,
+               "note": "kept/drift are read back from hou after the set; drift lists "
+                       "any parm that clamped, coerced or relabelled your value"})
 
 
 def _read_parms(s, p):

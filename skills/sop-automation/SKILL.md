@@ -20,7 +20,7 @@ structured JSON out. You never touch `hou` directly from the agent side.
 | `grid_bevel` | `container, size, divisions, bevel_width` | created paths, which parm names bound, cook status, geometry stats |
 | `create_node` | `node_type, name, parent` | node ref |
 | `chain` | `types[], names[], parent` | nodes + wiring list |
-| `set_parms` | `path, parms{}` | applied map (unknown parm name -> error with suggestions) |
+| `set_parms` | `path, parms{}` | `set`/`kept`/`drift`, read back from hou (unknown parm name -> error with suggestions) |
 | `read_parms` | `path, names[]` | raw parm values |
 | `find` | `pattern, limit` | matching node refs |
 | `geo_stats` | `path` | prims, points, packed count, pieces by `@name`, bounds |
@@ -43,6 +43,13 @@ hython -m houdini_skills.cli sop-automation grid_bevel \
   because packed/fractured geometry reports one per piece, not one per primitive.
 - **Set the display flag** on the chain output (`grid_bevel` does this) or an
   Object Merge downstream pulls the wrong geometry.
+- `find` matches **node paths with fnmatch**, not names: use `/obj/asm*/*` or
+  `/out/*usd*`. A bare substring like `asm_l5` returns zero matches, which is correct
+  behaviour, not an empty scene.
+- **A successful set is not proof.** `set_parms` reads every parm back and reports
+  `kept` plus `drift`, because hou clamps silently: `grid.rows = -5` and `= 0` both end
+  up `1`, `karma.trange = 99` lands on `'stage'`, and an int parm **raises** on a
+  fractional value (`rows = 2.7`) instead of rounding. Trust `kept`, not the request.
 - Deleting needs `confirm` equal to the path. There is no bulk delete in v1.
 
 ## Undo what an action made

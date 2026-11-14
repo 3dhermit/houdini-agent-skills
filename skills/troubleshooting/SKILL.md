@@ -20,9 +20,9 @@ attribute X", "the export ran but nothing happened".
 |---|---|---|
 | `hou_lookup` | no (better with) | does that hou name exist, what are the close matches, is it a known confusion |
 | `explain_error` | no | KB entries matching an error string, each flagged `verified` or not |
-| `diagnose_node` | yes | real errors/warnings, upstream inputs, matched KB causes |
-| `empty_geo_report` | yes | walks upstream until it finds the first non-empty SOP |
-| `node_type_lookup` | yes | exact + close type names across SOP/OBJ/DOP/LOP/ROP/COP |
+| `diagnose_node` | yes | real errors/warnings, matched KB causes, and per input: label, type and **cooked prim count** (input mute state is not readable through hou on 22.0.368) |
+| `empty_geo_report` | yes | cooks each input, walks upstream to the last non-empty SOP, and lists what it **cannot** check in `not_checked` |
+| `node_type_lookup` | yes | exact + close type names across **all 18 categories**, plus `creatable_here` for the network you named — `karma` is a `Driver` type *and* a LOP type, and only one of them is valid in `/out` |
 | `version_report` | yes | version, licence mode, type counts, frame range |
 
 ```bash
@@ -42,5 +42,10 @@ sound practice we have not reproduced here - present it to the user that way.
 | `node.parmNames()` | `node.parms()` / `node.parmTuples()` / `node.allParms()` |
 | `node.parmTemplate('class')` | `node.parmTemplateGroup().find('class')` |
 | `parm.parmType()` | not exposed; use `rawValue()` / `eval()` + `menuItems()` |
+| `hou.SopNode.inputState(i)` / `inputOutputState(i)` / `inputIsMuted()` / `inputType(i)` | none exist on 22.0.368 — cook the input and count prims instead (`inputLabels()` is real) |
+| `hou.NodeConnector` | renamed `hou.NodeConnection` |
+| `node.type().category().name() == "SOP"` | hou spells it **`Sop`** — compare case-insensitively or every SOP is "wrong category" |
+| `hou.nodeTypeCategories()["ROP"]` | the render category is keyed **`Driver`** (its `label()` is "Outputs"); `Lop` labels as "Solaris" |
+| `node_type.label()` / `internalName()` / `knownTypeNames()` | NodeType has only `name()` + `description()`; ask a network what it accepts with `node.childTypeCategory()` |
 
-Those four came from real tracebacks while building this repo, not from a list.
+Every row came from a real traceback or a live probe on 22.0.368, not from a list.

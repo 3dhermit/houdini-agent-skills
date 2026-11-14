@@ -65,6 +65,37 @@ class TestSopAutomation(unittest.TestCase):
         self.assertEqual(err["kind"], "unknown_parm")
         self.assertIn("sizex", str(err["details"]["rejected"]["sizx"]))
 
+    def test_set_parms_reports_what_hou_actually_kept(self):
+        # 22.0.368: hou clamps out-of-range numbers with NO error, and raises TypeError
+        # on a fractional value for an int parm. Not raising is not proof of success.
+        from houdini_skills.errors import SkillFailure
+        geo = self.s.ensure_geo("asmtest_kept")
+        grid = self.s.create("grid", "g", geo)
+        out = self.s.set_parms(grid.path(), {"rows": -5, "sizex": 6.5})
+        self.assertEqual(out["kept"]["rows"], "1", "hou clamps rows below its minimum")
+        self.assertIn("rows", out["drift"], "a silent clamp must be visible")
+        self.assertEqual(out["drift"]["rows"]["requested"], -5)
+        self.assertEqual(out["kept"]["sizex"], "6.5")
+        self.assertNotIn("sizex", out["drift"], "a value that stuck is not drift")
+        with self.assertRaises(SkillFailure) as cm:
+            self.s.set_parms(grid.path(), {"rows": 2.7})
+        err = cm.exception.to_result()["error"]
+        self.assertEqual(err["kind"], "parm_set_failed")
+        self.assertIn("fractional", str(err["message"]),
+                      "hou's own words should reach the caller")
+        self.assertNotIn("Additional information", str(err["message"]),
+                         "SWIG overload dumps belong in details, not the message")
+        self.assertIn("does not round", str(err["hint"]))
+
+    def test_menu_parm_index_clamps_and_relabels(self):
+        rop = self.s.create_at("/out", "karma", "asmtest_menu")
+        out = self.s.set_parms(rop.path(), {"trange": 99})
+        self.assertEqual(out["kept"]["trange"], "stage", "menus report the label")
+        self.assertIn("trange", out["drift"], "an out-of-range index must be flagged")
+        out2 = self.s.set_parms(rop.path(), {"trange": 2})
+        self.assertEqual(out2["kept"]["trange"], "on")
+        self.assertNotIn("trange", out2["drift"], "an in-range index is not drift")
+
     def test_unknown_node_type_raises_with_suggestions(self):
         from houdini_skills.errors import SkillFailure
         geo = self.s.ensure_geo("asmtest_types")
@@ -699,6 +730,93 @@ class TestCreatedNodeAccounting(unittest.TestCase):
             self.s.destroy_matching("/obj/asm_t_dop3*")
 
 
+@REAL_ONLY
+class TestDiagnosticsSurface(unittest.TestCase):
+    """diagnose_node / empty_geo_report / cache_sop, exercised on wired chains.
+
+    The inputState() crash only appears on a node that HAS an input, and the mute
+    check only matters when a chain is broken - so both escaped the earlier tests.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+        self.troub = import_skill_module("troubleshooting")
+        self.sim = import_skill_module("simulation-tools")
+        self.sopmod = import_skill_module("sop-automation")
+        self.s.destroy_matching("/obj/asm22_diag*")
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asm22_diag*")
+
+    def _chain(self, container):
+        return self.sopmod.run("grid_bevel", {"container": container,
+                                              "size": [1.0, 1.0], "divisions": 2,
+                                              "bevel_width": 0.02})
+
+    def test_diagnose_node_reads_a_wired_input(self):
+        built = self._chain("asm22_diag")
+        out = self.troub.run("diagnose_node", {"path": built["bevel"]})
+        self.assertEqual(len(out["inputs"]), 1, out["inputs"])
+        self.assertEqual(out["inputs"][0]["path"], built["grid"])
+        self.assertIsNotNone(out["inputs"][0]["output_prims"])
+        self.assertGreater(out["inputs"][0]["output_prims"], 0)
+        self.assertIn("input_state_note", out)
+
+    def test_empty_geo_report_localises_the_loss(self):
+        self.s.ensure_geo("asm22_diag2")
+        # A Null SOP passes geometry through, so the empty node must have no input
+        empty = self.s.create("null", "asm22_diag2_empty", "/obj/asm22_diag2")
+        rep = self.troub.run("empty_geo_report", {"path": empty.path()})
+        checks = [f["check"] for f in rep["findings"]]
+        self.assertIn("zero_prims", checks, rep["findings"])
+        self.assertNotIn("wrong_category", checks,
+                         "hou names the SOP category 'Sop'; this compare went "
+                         "case-sensitive and flagged every real SOP")
+
+        # feed it from a node that is itself empty: the blame must move upstream
+        src = self.s.create("null", "asm22_diag2_src", "/obj/asm22_diag2")
+        empty.setInput(0, src)
+        rep2 = self.troub.run("empty_geo_report", {"path": empty.path()})
+        checks2 = [f["check"] for f in rep2["findings"]]
+        self.assertIn("input_cook", checks2, checks2)
+        self.assertIn("input_empty", checks2, checks2)
+        self.assertIsNone(rep2.get("first_non_empty"))
+        self.assertIn("not_checked", rep2, "the report must say what it cannot check")
+
+    def test_node_type_lookup_scopes_to_the_named_network(self):
+        out = self.troub.run("node_type_lookup", {"name": "karma", "network": "/out"})
+        cats = out["categories"]
+        self.assertEqual(out["network_child_category"], "Driver",
+                         "hou calls the render category Driver, not ROP")
+        # karma is a type name in Driver AND Lop; only Driver is creatable in /out
+        self.assertIn("karma", cats["Driver"]["exact"], sorted(cats))
+        self.assertIn("karma", cats["Lop"]["exact"], "the Driver/Lop collision vanished")
+        self.assertTrue(cats["Driver"]["creatable_here"])
+        self.assertFalse(cats["Lop"]["creatable_here"],
+                         "name-only scoping would mark both categories valid")
+        geo = self.s.ensure_geo("asm22_ntl")
+        scoped = self.troub.run("node_type_lookup", {"name": "filecache",
+                                                    "network": geo})
+        self.assertEqual(scoped["network_child_category"], "Sop")
+        self.assertTrue(scoped["categories"]["Sop"]["creatable_here"])
+        self.assertFalse(scoped["categories"]["Lop"]["creatable_here"],
+                         "filecache is a type name in BOTH Sop and Lop")
+        self.assertIn("categories_searched", out)
+
+    def test_cache_sop_configures_without_writing(self):
+        built = self._chain("asm22_diag3")
+        target = os.path.join(tempfile.gettempdir(), "asm22_diag.$F4.bgeo.sc")
+        out = self.sim.run("cache_sop", {"path": built["bevel"], "cache_path": target,
+                                         "frames": [1, 3]})
+        self.assertIs(out["written"], False, "cache_sop wrote a file without being asked")
+        self.assertIn(out["file_cache"], out["created_nodes"])
+        self.assertIn("sopoutput", [v["parm"] for v in out["applied"].values()])
+        strays = [f for f in os.listdir(tempfile.gettempdir())
+                  if f.startswith("asm22_diag") and f.endswith(".bgeo.sc")]
+        self.assertEqual(strays, [], "cache files appeared: %s" % strays)
+
+
 class TestHoudini22ApiSpellings(unittest.TestCase):
     """Names that 19.5 scripts rely on, proven absent on 22.0.368.
 
@@ -795,6 +913,82 @@ class TestHoudini22ApiSpellings(unittest.TestCase):
         self.assertEqual(path.pathString, "/world/thing")
         self.assertFalse(hasattr(path, "pathname"),
                          "Sdf.Path.pathname exists now - the str() conversion note can go")
+
+    def test_category_names_are_hous_not_the_ui_labels(self):
+        cats = self.hou.nodeTypeCategories()
+        self.assertNotIn("ROP", cats, "hou keys the render category 'Driver'")
+        self.assertNotIn("OBJ", cats, "hou keys it 'Object'")
+        for key in ("Sop", "Object", "Lop", "Driver", "Dop", "Cop", "Cop2", "Data",
+                    "Chop", "Shop", "Top", "TopNet", "Vop", "VopNet", "CopNet",
+                    "ChopNet", "Director", "Manager"):
+            self.assertIn(key, cats, sorted(cats))
+        self.assertEqual(self.hou.ropNodeTypeCategory().name(), "Driver")
+        self.assertEqual(self.hou.sopNodeTypeCategory().name(), "Sop")
+        self.assertIn("karma", cats["Driver"].nodeTypes())
+        self.assertIn("karma", cats["Lop"].nodeTypes())
+        self.assertIn("filecache", cats["Sop"].nodeTypes())
+        self.assertIn("filecache", cats["Lop"].nodeTypes())
+        # a node's category name is 'Sop'/'Object', never the UI label 'SOP'/'OBJ'
+        geo_path = self.s.ensure_geo("asm22_cat")
+        self.assertEqual(self.hou.node(geo_path).type().category().name(), "Object")
+        self.assertEqual(self.hou.node(geo_path).childTypeCategory().name(), "Sop")
+        self.assertEqual(self.hou.node("/out").childTypeCategory().name(), "Driver")
+        self.assertEqual(self.hou.node("/stage").childTypeCategory().name(), "Lop")
+
+    def test_nodetype_name_accessors(self):
+        # 22.0.368: NodeType/OpNodeType instances expose name() and description() only.
+        # internalName(), typeName(), label(), knownTypeNames(), supplements() and
+        # allSupplements() raise AttributeError - the internal name IS name().
+        # NodeTypeCategory is different again: name() yes; keyName()/internalName()/
+        # description() no.
+        geo_path = self.s.ensure_geo("asm22_ntapi")
+        grid = self.s.create("grid", "asm22_grid", geo_path)
+        t = grid.type()
+        self.assertEqual(t.name(), "grid")
+        self.assertTrue(t.description())
+        for missing in ("internalName", "typeName", "label", "knownTypeNames",
+                        "supplements", "allSupplements"):
+            self.assertFalse(hasattr(t, missing),
+                             "hou.NodeType.%s() exists now - update the KB entry" % missing)
+        cat = self.hou.nodeTypeCategories()["Sop"]
+        self.assertEqual(cat.name(), "Sop")
+        # NodeTypeCategory has name()/label()/typeName(); NodeType instances do not label
+        self.assertEqual(cat.label(), "Geometry")
+        self.assertTrue(cat.typeName())
+        for missing in ("keyName", "internalName", "description"):
+            self.assertFalse(hasattr(cat, missing),
+                             "hou.NodeTypeCategory.%s() exists now" % missing)
+        self.assertEqual(self.hou.nodeTypeCategories()["Driver"].label(), "Outputs",
+                         "the /out tab Jake sees is the Driver category's label")
+        self.assertEqual(self.hou.nodeTypeCategories()["Lop"].label(), "Solaris")
+        # the honest way to ask "can I build this here": childTypeCategory()
+        self.assertIn("filecache", self.hou.node(geo_path).childTypeCategory().nodeTypes())
+        self.assertNotIn("filecache", self.hou.node("/out").childTypeCategory().nodeTypes(),
+                         "filecache is a Sop type, not a Driver type")
+        self.hou.node(geo_path).destroy()
+
+    def test_input_state_accessors_absent(self):
+        hou = self.hou
+        for name in ("inputState", "inputOutputState", "inputIsMuted",
+                     "isInputMuted", "inputType"):
+            self.assertFalse(hasattr(hou.SopNode, name),
+                             "hou.SopNode.%s() exists after all - the mute-state "
+                             "diagnostic can come back" % name)
+        for name in ("inputLabels", "inputs", "inputConnections"):
+            self.assertTrue(hasattr(hou.Node, name), "hou.Node.%s vanished" % name)
+        self.assertFalse(hasattr(hou, "NodeConnector"),
+                         "hou.NodeConnector is back; the rename note can go")
+        self.assertTrue(hasattr(hou, "NodeConnection"))
+
+    def test_find_is_a_path_glob_not_a_substring(self):
+        self.s.ensure_geo("asm22_find")
+        try:
+            hits = self.s.find("/obj/asm22_find*", 20)
+            self.assertTrue(any(h["path"] == "/obj/asm22_find" for h in hits), hits)
+            self.assertEqual(self.s.find("asm22_find", 20), [],
+                             "find() started matching substrings - docs say path glob")
+        finally:
+            self.s.destroy_matching("/obj/asm22_find*")
 
     def test_playbar_range_is_a_vector2(self):
         rng = self.hou.playbar.frameRange()

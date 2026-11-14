@@ -304,7 +304,7 @@ KNOWLEDGE_BASE = [
     },
     {
         "id": "scatter-no-number-use-npts",
-        "match": r"'number'.*scatter|scatter.*'number'|stdswitcher",
+        "match": r"scatter.*\bnumber\b|\bnumber\b.*scatter|stdswitcher",
         "cause": "scatter::2.0 on 22.0.368 has no `number` parm (and no 19.5-era "
                  "stdswitcher). Point count is `npts`; the mode menu `generateby` offers "
                  "exactly bydensity, countperprimitive, texturespace. Silent no-ops here are "
@@ -413,16 +413,111 @@ KNOWLEDGE_BASE = [
                     "the named containers; after created_nodes landed, a live run went "
                     "13533 -> 13533 nodes with swept_leaked_paths == []",
     },
+    {
+        "id": "sopnode-no-input-state-api",
+        "match": r"has no attribute 'inputState'|has no attribute 'inputOutputState'|has no attribute 'inputIsMuted'|has no attribute 'inputType'|has no attribute 'NodeConnector'",
+        "cause": "hou.SopNode on 22.0.368 has inputLabels(), inputs(), "
+                 "inputConnections() and inputConnectors(), but NOT inputState(), "
+                 "inputOutputState(), inputIsMuted(), isInputMuted() or inputType() - "
+                 "input mute state is simply not queryable through hou on this build. "
+                 "The connector class is hou.NodeConnection; hou.NodeConnector raises "
+                 "AttributeError with a 'Did you mean' pointing at it.",
+        "fix": "Diagnose a chain by cooking it: per input report "
+               "len(inp.geometry().prims()) - a 0 or None tells you where geometry "
+               "died, which is what a mute-state guess was standing in for. Use "
+               "inputLabels() for names. Never claim an input is muted when you cannot "
+               "read that state.",
+        "verified": True,
+        "evidence": "live session 22.0.368: SopNode.inputState() raised AttributeError "
+                    "inside this repo's own diagnose_node; hasattr probes on "
+                    "/obj/geo1/xform1 were False for inputState/inputOutputState/"
+                    "inputIsMuted/isInputMuted/inputType and True for inputLabels; "
+                    "hou.NodeConnector raised AttributeError (Did you mean: "
+                    "NodeConnection), whose dir() exposes no mute/state methods",
+    },
+    {
+        "id": "category-names-are-hous-not-the-menus",
+        "cause": "hou's category names are not the UI labels. hou.nodeTypeCategories() is "
+                 "keyed: Chop, ChopNet, Cop, Cop2, CopNet, Data, Director, Dop, Driver, "
+                 "Lop, Manager, Object, Shop, Sop, Top, TopNet, Vop, VopNet. The render "
+                 "category is **Driver** - hou.ropNodeTypeCategory().name() returns "
+                 "'Driver', so hou.nodeTypeCategories()['ROP'] raises KeyError. Its "
+                 "label() is 'Outputs', which is the tab name in the UI (Lop labels as "
+                 "'Solaris', Sop as 'Geometry'). Accessors differ by class: "
+                 "NodeTypeCategory has name()/label()/typeName() but no keyName(), "
+                 "internalName() or description(); NodeType/OpNodeType/SopNodeType have "
+                 "name() and description() but no label(), internalName(), typeName() or "
+                 "knownTypeNames().",
+        "match": r"KeyError.*'ROP'|nodeTypeCategories\(\)\[|category\(\)\.name\(\)|has no attribute 'label'|has no attribute 'knownTypeNames'",
+        "fix": "Key category lookups by hou's own names, and compare case-insensitively "
+               "(a SOP node's category().name() is 'Sop'). Ask a network what it accepts "
+               "with node.childTypeCategory() (/out -> Driver, a geo SOP net -> Sop, "
+               "/stage -> Lop). troub.version_report returns counts keyed by hou's names "
+               "with a human 'label' beside each.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython + live probe: hou.ropNodeTypeCategory().name() == 'Driver' "
+                    "(90 types, karma among them), label() == 'Outputs'; Lop name 'Lop' "
+                    "label 'Solaris' (219 types, karma, filecache); Sop name 'Sop' label "
+                    "'Geometry' (1693); NodeTypeCategory lacks keyName/internalName/"
+                    "description; SopNodeType lacks label/internalName/typeName/"
+                    "knownTypeNames; a case-sensitive category()=='SOP' check flagged "
+                    "every SOP in this repo's own empty_geo_report",
+    },
+    {
+        "id": "type-names-collide-across-categories",
+        "cause": "Node type names collide across categories: 'karma' is both a Driver "
+                 "(render) and a Lop type; 'filecache' is both a Sop and a Lop type. A "
+                 "lookup that ignores category hands you the wrong node class, and the "
+                 "wrong node silently refuses the parms you set.",
+        "match": r"wrong node type|no parm|parm.*not found|invalid.*type",
+        "fix": "Resolve the type against the network you are creating in: "
+               "troub.node_type_lookup reports valid_in_network for the network you name, "
+               "and sop.list_types lists only what that network accepts.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "22.0.368 probe: karma present in Driver (90) and Lop (219); filecache "
+                    "present in Sop (1693) and Lop (219); SOP and LOP share 33 type names",
+    },
+    {
+        "id": "parm-set-silently-clamps",
+        "cause": "A set() call that does not raise is not proof the parm holds your "
+                 "value. On 22.0.368 hou clamps silently: grid.rows = -5 and rows = 0 "
+                 "both end up 1; karma.samplesperpixel = 0 ends up 1; a menu parm takes "
+                 "an index and clamps it (karma.trange = 99 -> index 3, rawValue() "
+                 "'stage'; -3 -> index 0, 'off'). An int parm given a fractional value "
+                 "instead RAISES TypeError: 'Cannot set an int parm to a fractional "
+                 "value' - it does not round. Float parms with no range keep negatives "
+                 "(grid.sizex = -3 stays -3.0).",
+        "match": r"Cannot set an int parm to a fractional value|clamped|parm.*reset|"
+                 r"value.*not.*stick|set.*had no effect|parm_set_failed",
+        "fix": "Read the parm back after setting: rawValue() for the label/string, "
+               "eval() for the number or menu index. Session.set_parms does this and "
+               "returns set/kept/drift; trust kept and act on drift (clamp the input "
+               "yourself, or pick a valid menu index) instead of believing the request.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe 22.0.368: grid.rows set to -5 -> 1, 0 -> 1, 2.7 -> "
+                    "TypeError 'Cannot set an int parm to a fractional value', 3 -> 3; "
+                    "grid.sizex 6.5 -> 6.5, -3 -> -3.0; karma.samplesperpixel 0 -> 1; "
+                    "karma.trange menuItems ('off','normal','on','stage') with 99 -> eval "
+                    "3 raw 'stage', -3 -> eval 0 raw 'off', 2 -> eval 2 raw 'on'",
+    },
 ]
 
 # Causes of empty geometry, checked in order by empty_geo_report.
 EMPTY_GEO_CHECKS = [
-    ("node_missing", "the path does not resolve"),
-    ("wrong_category", "an object or LOP was queried instead of a SOP"),
+    ("wrong_category", "the node is not a SOP (hou's category name is 'Sop', so this "
+                       "must be compared case-insensitively)"),
     ("no_geometry", "node has no geometry object at all"),
     ("zero_prims", "geometry exists but has no primitives"),
-    ("input_muted", "the incoming SOP input is muted/passthrough"),
-    ("display_flag", "the container's display flag is elsewhere"),
+    ("input_cook", "every wired input is cooked and its prim count reported"),
+    ("input_empty", "a wired input already cooks to 0 primitives, so the loss is upstream"),
+    ("upstream_walk", "up to 12 levels of first inputs walked for the last non-empty node"),
+]
+# Honest about the limits: the mute-state check a 19.5 script would want is not
+# possible on 22.0.368, and this action does not inspect the display flag.
+EMPTY_GEO_NOT_CHECKED = [
+    "input mute/passthrough state (hou.SopNode has no inputState/inputOutputState/"
+    "inputIsMuted on 22.0.368)",
+    "where the container's display flag is set",
 ]
 
 
@@ -486,12 +581,32 @@ def _diagnose_node(s, p):
                                   "fix": entry["fix"], "verified": entry["verified"]})
                 break
     inputs = []
+    # Verified on 22.0.368: hou.SopNode has inputLabels() but NO inputState(),
+    # inputOutputState(), inputIsMuted() or inputType() - and input muting is not
+    # queryable through the hou API on this build. What actually locates a broken
+    # chain is each input's own type and cooked prim count.
+    try:
+        labels = list(node.inputLabels() or [])
+    except Exception:
+        labels = []
     for i, inp in enumerate(node.inputs()):
-        inputs.append({"index": i, "path": inp.path() if inp else None,
-                       "state": str(inp.inputState(i if inp else 0)) if inp else ""})
+        if inp is None:
+            inputs.append({"index": i, "label": labels[i] if i < len(labels) else None,
+                           "path": None, "type": None, "output_prims": None})
+            continue
+        try:
+            prims = len(inp.geometry().prims())
+        except Exception:
+            prims = None
+        inputs.append({"index": i, "label": labels[i] if i < len(labels) else None,
+                       "path": inp.path(), "type": s._type(inp), "output_prims": prims})
     return ok({"path": node.path(), "type": s._type(node),
                "errors": hard, "warnings": [e for e in errs if e["severity"] == "warning"],
                "explained": explained, "inputs": inputs,
+               "input_state_note": "input mute/cook state is not exposed by hou on "
+                                   "22.0.368 (inputState/inputOutputState/"
+                                   "inputIsMuted/inputType all absent on hou.SopNode); "
+                                   "output_prims per input is the usable signal",
                "suggested_actions": _suggest_actions(node, hard)})
 
 
@@ -512,7 +627,9 @@ def _empty_geo_report(s, p):
     node = s.node(p["path"])
     findings = []
     cat = node.type().category().name()
-    if cat != "SOP":
+    # hou spells category names 'Sop'/'Lop'/'Rop' - a case-sensitive compare against
+    # "SOP" flagged every real SOP as the wrong category (found by a live run).
+    if cat.lower() != "sop":
         findings.append({"check": "wrong_category",
                          "detail": f"{p['path']} is a {cat} node, not a SOP"})
     geo = None
@@ -529,13 +646,21 @@ def _empty_geo_report(s, p):
     for i, inp in enumerate(node.inputs()):
         if inp is None:
             continue
+        # Verified on 22.0.368: no inputOutputState()/inputIsMuted() on hou.SopNode,
+        # so an empty input is detected by cooking it, not by reading mute state.
         try:
-            state = node.inputOutputState(i)
+            count = len(inp.geometry().prims())
         except Exception:
-            state = None
-        if state is not None and str(state) not in ("InputOutputState.ACTIVE", "0"):
-            findings.append({"check": "input_muted",
-                             "detail": f"input {i} from {inp.path()} is {state}"})
+            count = None
+        findings.append({"check": "input_cook",
+                         "detail": f"input {i} from {inp.path()} cooked "
+                                   + ("0 primitives" if count == 0 else
+                                      (f"{count} primitives" if count is not None else
+                                       "no geometry (node failed to cook)"))})
+        if count == 0:
+            findings.append({"check": "input_empty",
+                             "detail": f"input {i} ({inp.path()}) is already empty - "
+                                       "the loss is upstream of here"})
     up = node.inputs()
     walk = []
     cur = node
@@ -556,32 +681,45 @@ def _empty_geo_report(s, p):
     return ok({"path": node.path(), "category": cat,
                "findings": findings, "upstream_walk": walk,
                "first_non_empty": next((w["path"] for w in walk if w["prims"] > 0), None),
-               "checks_available": [c[0] for c in EMPTY_GEO_CHECKS]})
+               "checks_available": [c[0] for c in EMPTY_GEO_CHECKS],
+               "not_checked": EMPTY_GEO_NOT_CHECKED})
 
 
 def _node_type_lookup(s, p):
     name = p["name"].lower()
-    hits = {}
-    for label, getter in (
-        ("SOP", lambda: s.hou.sopNodeTypeCategory().nodeTypes()),
-        ("OBJ", lambda: s.hou.objNodeTypeCategory().nodeTypes()),
-        ("DOP", lambda: s.hou.dopNodeTypeCategory().nodeTypes()),
-        ("LOP", lambda: s.hou.lopNodeTypeCategory().nodeTypes()),
-        ("ROP", lambda: s.hou.ropNodeTypeCategory().nodeTypes()),
-        ("COP", lambda: s.hou.copNodeTypeCategory().nodeTypes()),
-    ):
+    network = p.get("network") or ""
+    # Which category can actually create that name in the network you named. Name-based
+    # scoping alone would lie: 'karma' is a type name in BOTH the Driver (render) and Lop
+    # categories, so "karma is valid in /out" says nothing about WHICH karma you get.
+    # hou answers this with node.childTypeCategory() - the category a network accepts.
+    child_cat = None
+    if network:
+        net = s.node(network)
         try:
-            types = set(getter().keys())
+            child_cat = net.childTypeCategory().name()
+        except Exception:
+            child_cat = None
+    hits = {}
+    cats = s.hou.nodeTypeCategories()
+    for label in sorted(cats):
+        try:
+            types = set(cats[label].nodeTypes())
         except Exception:
             continue
-        exact = [t for t in types if t.lower() == name]
+        exact = sorted(t for t in types if t.lower() == name)
         near = suggest(name, types, 6)
         if exact or near:
-            hits[label] = {"exact": exact, "close": near}
+            hits[label] = {"exact": exact, "close": near,
+                           "creatable_here": (label == child_cat) if network else None}
     if not hits:
         raise SkillFailure("no_such_node_type", f"nothing like {p['name']!r} in any category",
                            hint="try a broader keyword, e.g. 'voronoi', 'wrangle', 'cache'")
-    return ok({"query": p["name"], "categories": hits})
+    return ok({"query": p["name"], "network": network or None,
+               "network_child_category": child_cat,
+               "categories_searched": sorted(cats), "categories": hits,
+               "note": "type names collide across categories (karma is a Driver and a Lop "
+                       "type, filecache a Sop and a Lop type); creatable_here marks the "
+                       "category node.childTypeCategory() reports for the network you named"})
 
 
 def _version_report(s, p):
@@ -591,15 +729,21 @@ def _version_report(s, p):
     except Exception:
         pass
     cats = {}
-    for label, getter in (("SOP", s.hou.sopNodeTypeCategory), ("OBJ", s.hou.objNodeTypeCategory),
-                          ("LOP", s.hou.lopNodeTypeCategory), ("ROP", s.hou.ropNodeTypeCategory)):
+    # Key the counts by the names hou itself uses, so a caller can feed them straight
+    # back into hou.nodeTypeCategories(). The UI labels do NOT match: hou calls the
+    # render category 'Driver' (label 'Outputs'), and a lookup by "ROP" raises KeyError.
+    hou_cats = s.hou.nodeTypeCategories()
+    for key in sorted(hou_cats):
         try:
-            cats[label] = len(getter().nodeTypes())
+            cats[key] = {"count": len(hou_cats[key].nodeTypes()),
+                         "label": hou_cats[key].label()}
         except Exception:
-            cats[label] = None
+            cats[key] = {"count": None, "label": None}
     from houdini_skills.versions import MIN_SUPPORTED
     return ok({"version": str(s.version), "series": list(s.version.series),
                "apprentice_licence": apprentice, "node_type_counts": cats,
+               "category_name_warning": "hou names the render category 'Driver', not "
+                                        "'ROP' (hou.ropNodeTypeCategory().name() == 'Driver')",
                "repo_floor": list(MIN_SUPPORTED), "frame_range": s.frame_range()})
 
 
