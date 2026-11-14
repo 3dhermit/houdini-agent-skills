@@ -21,6 +21,15 @@ Short version: **prove it on a real Houdini, or say that you did not.**
 4. **Version floor is a claim.** `houdini_versions` may declare 19.5+; `verified_on`
    must list only builds actually run. Never move a version into `verified_on`
    without a Tier B run on it.
+5. **A declared knob must be read.** Every key in an action's `payload_schema` has
+   to be read by that action's handler (handler body plus the functions it reaches
+   while passing the payload). `python tools/check_payload_knobs.py` proves it and
+   CI runs it; `tests/test_tier_a.py::TestPayloadKnobAudit` tests the audit itself.
+   v1.0.0 shipped three lies this caught: `pyro cache_dir`, `pyro resolution_scale`
+   (the Pyro Solver SOP has no cache-path or resolution parm among its 670 parms to
+   bind them to) and `rendering path` ("geometry or LOP to render" - the Karma ROP
+   has no scene-source parm among its 405). Deleting a knob is allowed; a knob that
+   goes nowhere is not.
 
 ## Adding or changing a skill
 

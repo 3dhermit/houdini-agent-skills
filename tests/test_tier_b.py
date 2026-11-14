@@ -229,7 +229,7 @@ class TestUsdExport(unittest.TestCase):
         if os.path.exists(out):
             os.remove(out)
         result = usd.run("export", {"path": grid.path(), "output": out,
-                                    "container": "asmusd_rop", "frames": [], "unpack": False})
+                                    "container": "asmusd_rop", "frames": []})
         self.assertTrue(os.path.isfile(out), f"no USD written: {result}")
         self.assertGreater(os.path.getsize(out), 40, "USD file is suspiciously small")
         verify = usd.run("verify", {"output": out})
@@ -271,6 +271,40 @@ class TestRenderConfig(unittest.TestCase):
             self.assertEqual(cm.exception.kind, "engine_unavailable")
             self.assertIn("karma", cm.exception.err.hint.lower())
         self.s.destroy_matching("/out/asmmantra")
+
+    def test_camera_knob_reports_what_hou_kept(self):
+        """`applied` used to echo the requested value; on this build that is not proof.
+
+        The `camera` knob replaced the old `path` knob, which no code ever read.
+        The schema also refuses `samples: 0` up front, because 22.0.368 would clamp
+        it to 1 in silence - rejecting it is better than reporting a value the caller
+        never asked for.
+        """
+        from houdini_skills.errors import SkillFailure
+        from skills import import_skill_module
+        rend = import_skill_module("rendering")
+        result = rend.run("configure", {"container": "asmcam", "engine": "karma_cpu",
+                                        "camera": "/obj/cam1", "samples": 8})
+        try:
+            applied = result["applied"]
+            self.assertEqual(applied["camera"]["parm"], "camera")
+            self.assertEqual(applied["camera"]["kept"], "/obj/cam1")
+            self.assertEqual(applied["samples"]["parm"], "samplesperpixel")
+            self.assertEqual(applied["samples"]["requested"], 8)
+            self.assertEqual(applied["samples"]["kept"], "8",
+                             "kept must be the node's rawValue(), not the request")
+            with self.assertRaises(SkillFailure) as cm:
+                rend.run("configure", {"container": "asmcam2", "engine": "karma_cpu",
+                                       "samples": 0})
+            self.assertEqual(cm.exception.kind, "invalid_input")
+            self.assertIn("minimum", str(cm.exception))
+            # the retired knob must be rejected, not silently ignored
+            with self.assertRaises(SkillFailure) as cm:
+                rend.run("configure", {"container": "asmcam3", "engine": "karma_cpu",
+                                       "path": "/obj/geo1"})
+            self.assertIn("path", str(cm.exception))
+        finally:
+            self.s.destroy_matching("/out/asmcam*")
 
     def test_karma_xpu_does_not_invent_a_parm(self):
         from skills import import_skill_module
@@ -988,6 +1022,98 @@ class TestHoudini22ApiSpellings(unittest.TestCase):
                          "hou.NodeConnector is back; the rename note can go")
         self.assertTrue(hasattr(hou, "NodeConnection"))
 
+    def test_pyro_source_authors_density_where_the_build_accepts_it(self):
+        """No Pyro Source SOP, no `snippet`, no `voxelsize` - all verified absent.
+
+        v1.0.0 injected a density wrangle into a `pyrosource` node that has no
+        `snippet` parm (a guard skipped it) and set `voxelsize` on a Volume SOP that
+        has no such parm. The recipe now writes the field through parms the node
+        really has, and reports each read-back.
+        """
+        from skills import import_skill_module
+        sim = import_skill_module("simulation-tools")
+        out = sim.run("pyro", {"container": "asm22_pyr", "frames": [1, 40],
+                               "source_radius": 0.4, "voxel_size": 0.05,
+                               "density": 1.0})
+        try:
+            chain = out["source_chain"]
+            self.assertEqual([n.split("/")[-1] for n in chain],
+                             ["pyro_src", "pyro_vol"],
+                             "pyrosource dropped out of the chain: " + str(chain))
+            self.assertNotIn("pyrosource",
+                             [n.split("/")[-1] for n in out["created_nodes"]])
+            rep = out["parm_report"]
+            self.assertEqual(rep["pyro_vol.name"]["kept"], "density")
+            # rawValue() comes back a float for a plain Floatparm ('initialval1') but a
+            # string for channel-capable parms ('f1' -> '7'), both on the same build,
+            # so numeric read-backs get compared as numbers.
+            self.assertEqual(float(rep["pyro_vol.initialval1"]["kept"]), 1.0)
+            self.assertEqual(float(rep["pyro_vol.divsize"]["kept"]), 0.05)
+            vol = self.hou.node(chain[-1])
+
+            def menu_index(parm, label):
+                return list(vol.parm(parm).menuItems()).index(label)
+
+            # Menu parms report two things at once on this build: rawValue() is the
+            # identifier and eval() is the index into menuItems(). Live proof on
+            # 22.0.368: volume `type` kept 'float' with eval 0, `rank` kept 'scalar'
+            # with eval 0. Compare like for like.
+            self.assertEqual(rep["pyro_vol.type"]["kept"], "float")
+            self.assertEqual(rep["pyro_vol.rank"]["kept"], "scalar")
+            self.assertEqual(rep["pyro_vol.type"]["eval"], menu_index("type", "float"))
+            self.assertEqual(rep["pyro_vol.rank"]["eval"], menu_index("rank", "scalar"))
+            self.assertTrue(all(v["bound"] for v in rep.values()),
+                            "a density parm went unbound: " + str(rep))
+            self.assertEqual(rep["pyro_src.rad"]["kept"], [0.4, 0.4, 0.4])
+            # the solver is wired to the volume on the input the node itself names
+            self.assertEqual(self.hou.node(out["solver"]).input(0).name(),
+                             chain[-1].split("/")[-1])
+            self.assertEqual(out["solver_wiring"]["input_labels"][0], "Sources")
+            # the source really cooks to a Volume prim
+            self.assertEqual(out["source_stats"]["prim_types"].get("Volume"), 1)
+            self.assertTrue(out["not_verified"],
+                            "the payload must say the field data was never read back")
+        finally:
+            self.s.destroy_matching("/obj/asm22_pyr*")
+
+    def test_render_range_survives_karmas_default_channels(self):
+        """A fresh Karma ROP holds '$FSTART'/'$FEND'; a bare set() is ignored.
+
+        Verified: set(24) left f2 at '$FEND' / eval 40.0; deleteAllKeyframes() then
+        set(31) gave '31' / 31.0. configure() therefore clears the range parms'
+        keyframes before writing them, and `drift` proves it worked.
+        """
+        from skills import import_skill_module
+        rend = import_skill_module("rendering")
+        out = rend.run("configure", {"container": "asm22_rng", "engine": "karma_cpu",
+                                     "frames": [7, 33]})
+        try:
+            rop = self.hou.node(out["rop"])
+            self.assertEqual(rop.parm("f1").eval(), 7.0,
+                             "f1 still follows $FSTART - the channel was not cleared")
+            self.assertEqual(rop.parm("f2").eval(), 33.0)
+            self.assertEqual(out["drift"], [], str(out["applied"]))
+            self.assertTrue(out["applied"]["start"].get("cleared_keyframes"))
+            self.assertEqual(out["applied"]["start"]["kept"], "7",
+                             "rawValue() on a channelled ROP parm is a string")
+        finally:
+            self.s.destroy_matching("/out/asm22_rng*")
+
+    def test_current_frame_is_module_level_not_on_the_playbar(self):
+        """hou.frame()/hou.time() exist; hou.playbar.frame() and hou.pwd().frame() do not."""
+        self.assertIsInstance(float(self.hou.frame()), float)
+        self.assertIsInstance(float(self.hou.time()), float)
+        for absent in ("frame", "time"):
+            self.assertFalse(hasattr(self.hou.playbar, absent),
+                             f"hou.playbar.{absent}() is not on this build")
+        self.assertTrue(hasattr(self.hou.playbar, "frameRange"))
+        self.assertTrue(hasattr(self.hou, "setFrame"))
+        self.assertTrue(hasattr(self.hou, "frameToTime"))
+        self.assertTrue(hasattr(self.hou, "timeToFrame"))
+        pwd = self.hou.pwd()
+        self.assertFalse(hasattr(pwd, "frame"),
+                         "hou.pwd() is a node handle (whatever the UI is on), not a clock")
+
     def test_sop_level_solvers_have_no_dop_parm_and_named_inputs(self):
         """The builders no longer create a dopnet, and this pins why.
 
@@ -1054,7 +1180,7 @@ class TestHoudini22ApiSpellings(unittest.TestCase):
                              "site_count never reached the Scatter SOP")
             self.assertEqual(out["parm_report"]["flip_src.rad"]["kept"],
                              [0.5, 0.5, 0.5])
-            self.assertEqual(out["parm_report"]["flip_points.npts"]["kept"], 40)
+            self.assertEqual(float(out["parm_report"]["flip_points.npts"]["kept"]), 40)
             self.assertEqual(out["solver_wiring"]["input_labels"][0], "Sources")
             self.assertEqual(out["solver_wiring"]["dop_parms"], [])
             # the FLIP Source SOP's single prim is a VDB volume, not lost geometry

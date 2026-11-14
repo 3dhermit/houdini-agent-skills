@@ -2,40 +2,112 @@
   "name": "rendering",
   "version": "1.0.0",
   "description": "Configure a Karma (or mantra) Render Output ROP: driver, resolution, frame range, output path, AOV requests. Config only - it does not silently render.",
-  "houdini_versions": ["20.0", "20.5", "21.0", "22.0"],
-  "unsupported_versions": ["19.5 has no Karma; this skill errors with a mantra fallback note"],
+  "houdini_versions": [
+    "20.0",
+    "20.5",
+    "21.0",
+    "22.0"
+  ],
+  "unsupported_versions": [
+    "19.5 has no Karma; this skill errors with a mantra fallback note"
+  ],
   "verified_notes": [
     "22.0.368: mantra is NOT a registered ROP type, so the mantra fallback only applies to 19.5-21.x",
     "22.0.368: no karma_xpu node type and no ROP parm selects CPU vs XPU; configure() returns xpu_note"
   ],
-  "verified_on": ["22.0.368"],
-  "dependencies": ["houdini_skills"],
-  "triggers": ["set up a karma render", "configure aovs", "set render resolution", "point a render rop at my geo"],
+  "verified_on": [
+    "22.0.368"
+  ],
+  "dependencies": [
+    "houdini_skills"
+  ],
+  "triggers": [
+    "set up a karma render",
+    "configure aovs",
+    "set render resolution",
+    "point a render rop at my geo"
+  ],
   "examples": [
     "hython -m houdini_skills.cli rendering configure --json '{\"container\":\"asm_render\",\"path\":\"/obj/asm_sop/bevel1\",\"resolution\":[960,540]}'"
   ],
   "sources": [
-    {"repo": "https://github.com/healkeiser/fxhoudinimcp", "license": "MIT", "used_for": "naming parity with its setup_render tool; independent implementation"}
+    {
+      "repo": "https://github.com/healkeiser/fxhoudinimcp",
+      "license": "MIT",
+      "used_for": "naming parity with its setup_render tool; independent implementation"
+    }
   ],
   "actions": {
     "configure": {
       "type": "object",
       "properties": {
-        "container": {"type": "string", "default": "asm_render"},
-        "path": {"type": "string", "description": "geometry or LOP to render (optional in v1)"},
-        "engine": {"type": "string", "enum": ["karma_cpu", "karma_xpu", "mantra"], "default": "karma_cpu"},
-        "resolution": {"type": "array", "items": {"type": "integer"}, "default": [1280, 720]},
-        "frames": {"type": "array", "items": {"type": "number"}},
-        "output_path": {"type": "string", "default": ""},
-        "aovs": {"type": "array", "items": {"type": "string"}, "default": []},
-        "samples": {"type": "integer", "default": 64, "minimum": 1, "maximum": 8192}
+        "container": {
+          "type": "string",
+          "default": "asm_render"
+        },
+        "camera": {
+          "type": "string",
+          "default": "",
+          "description": "render ROP's verified 'camera' parm on 22.0.368 (default '/obj/cam1'); set only when non-empty, and the result's parm_report says what hou kept"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "karma_cpu",
+            "karma_xpu",
+            "mantra"
+          ],
+          "default": "karma_cpu"
+        },
+        "resolution": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "default": [
+            1280,
+            720
+          ]
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "output_path": {
+          "type": "string",
+          "default": ""
+        },
+        "aovs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "samples": {
+          "type": "integer",
+          "default": 64,
+          "minimum": 1,
+          "maximum": 8192
+        }
       }
     },
     "inspect": {
       "type": "object",
-      "required": ["path"],
-      "properties": {"path": {"type": "string"}}
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
     },
-    "list_engines": {"type": "object", "properties": {}}
+    "list_engines": {
+      "type": "object",
+      "properties": {}
+    }
   }
 }

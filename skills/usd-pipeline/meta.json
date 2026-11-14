@@ -63,10 +63,6 @@
             "type": "number"
           }
         },
-        "unpack": {
-          "type": "boolean",
-          "default": false
-        },
         "flatten_sop_layers": {
           "type": "boolean",
           "default": false,

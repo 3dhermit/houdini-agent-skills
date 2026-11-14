@@ -31,6 +31,10 @@ PARM_CANDIDATES = {
     "end": ["f2", "saverangeEnd", "endframe"],
     "range_enable": ["trange"],
     "samples": ["samplesperpixel", "samples", "maxsamples"],
+    # verified on 22.0.368 by reading a fresh Karma ROP: `camera` is a real parm
+    # (default '/obj/cam1'). The old `path` payload knob had no candidate here and
+    # nothing read it, so it is gone from the schema.
+    "camera": ["camera"],
 }
 
 # Verified on 22.0.368: the Karma ROP has NO parm that selects CPU vs XPU
@@ -39,6 +43,12 @@ PARM_CANDIDATES = {
 # concern, not a ROP knob, so this skill reports that instead of silently
 # setting a made-up parm.
 XPU_PARM_HINTS = ("renderer", "rendermethod", "schedule", "xpu")
+
+# Houdini ships these parms pre-channels, and a plain set() on a channelled parm is
+# ignored. Verified on 22.0.368: a fresh karma ROP holds '$FSTART'/'$FEND' in f1/f2
+# and set(24) left them at '$FEND' / eval 40.0. They get their keyframes cleared
+# first, which is why they are named here instead of being set blind.
+CHANNEL_PARMS = ("f1", "f2")
 
 
 CATEGORY = "rendering"
@@ -105,8 +115,15 @@ def _configure(s, p):
 
     mark = len(s.created)
     rop = s.create_at(out_net.path(), chosen, p["container"])
-    applied, unresolved = {}, {}
+    applied, unresolved, drift = {}, {}, []
     knobs = {}
+    # 'camera' is a real Karma ROP parm on 22.0.368 (default '/obj/cam1', read off a
+    # fresh node). The old `path` knob promised "geometry or LOP to render" and was
+    # never read: this build's Karma ROP has no soppath/lophotoflame parm among its
+    # 405 parms, so what gets rendered is the stage the LOP context shows, not a
+    # string this action can invent.
+    if p.get("camera"):
+        knobs["camera"] = p["camera"]
     if p.get("resolution"):
         knobs["resolutionx"] = int(p["resolution"][0])
         knobs["resolutiony"] = int(p["resolution"][1])
@@ -135,8 +152,44 @@ def _configure(s, p):
             unresolved[knob] = PARM_CANDIDATES[knob]
             continue
         try:
+            cleared_keyframes = False
+            # On 22.0.368 a fresh Karma ROP ships f1/f2 as channel parms holding
+            # '$FSTART' and '$FEND', and a plain set() on them is ignored: verified
+            # set(24) left rawValue '$FEND' and eval 40.0, while
+            # deleteAllKeyframes() then set(31) gave raw '31' / eval 31.0. The range
+            # parms therefore get their keyframes cleared first. That is safe on a
+            # ROP this action just created; if you point it at an animated ROP, its
+            # frame-range animation goes, which is why the payload records it.
+            if name in CHANNEL_PARMS:
+                try:
+                    rop.parm(name).deleteAllKeyframes()
+                    cleared_keyframes = True
+                except Exception:
+                    pass
             rop.parm(name).set(value)
-            applied[knob] = {"parm": name, "value": value}
+            # Read the parm back instead of echoing the request: on this build
+            # hou clamps out-of-range numbers silently and a menu parm stores an
+            # index, so rawValue() is the label and eval() the index.
+            try:
+                kept = rop.parm(name).rawValue()
+            except Exception:
+                kept = None
+            try:
+                evaluated = rop.parm(name).eval()
+            except Exception:
+                evaluated = None
+            rec = {"parm": name, "requested": value, "kept": kept, "eval": evaluated}
+            if cleared_keyframes:
+                rec["cleared_keyframes"] = True
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    if evaluated is None or abs(float(evaluated) - float(value)) > 1e-6:
+                        drift.append(knob)
+                        rec["drift"] = True
+                except (TypeError, ValueError):
+                    drift.append(knob)
+                    rec["drift"] = True
+            applied[knob] = rec
         except Exception as exc:
             unresolved[knob] = [f"{name}: {exc}"]
 
@@ -151,7 +204,10 @@ def _configure(s, p):
 
     return ok({"rop": rop.path(), "node_type": chosen, "engine": engine,
                "created_nodes": s.created[mark:],
-               "applied": applied, "unresolved": unresolved,
+               "applied": applied, "unresolved": unresolved, "drift": drift,
+               "drift_note": ("knobs whose eval() did not come back equal to what was "
+                              "asked for; an empty list means the node really holds "
+                              "the numbers you sent" if drift else ""),
                "xpu_note": xpu_note,
                "requested_aovs": p.get("aovs") or [], "aov_note": aov_note,
                "rendered": False,

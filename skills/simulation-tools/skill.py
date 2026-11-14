@@ -82,17 +82,26 @@ def _solver_wiring(solver) -> dict:
 def _set_and_read(node, candidates, value) -> dict:
     """Set the first parm name that exists, then read it back.
 
-    `kept` is hou's answer afterwards, never the requested value: hou clamps
-    out-of-range numbers silently and raises TypeError on a fraction in an int parm.
+    Same contract as `houdini_skills.hou_api.Session.set_parms`: `kept` is the parm's
+    rawValue() afterwards and `eval` its evaluated value, never the requested value.
+    hou clamps out-of-range numbers silently, raises TypeError on a fraction in an int
+    parm, and on a menu parm rawValue() may be the label *or* the index depending on
+    the parm (karma `trange` -> 'normal', Volume SOP `type` -> 0), which is why both
+    read-backs are reported.
     """
     parm, bound = _set_any(node, candidates, value)
-    kept = None
+    kept, evaluated = None, None
     if bound:
         try:
-            kept = node.parm(parm).eval()
+            kept = node.parm(parm).rawValue()
         except Exception:
             kept = None
-    return {"parm": parm, "requested": value, "kept": kept, "bound": bound}
+        try:
+            evaluated = node.parm(parm).eval()
+        except Exception:
+            evaluated = None
+    return {"parm": parm, "requested": value, "kept": kept, "eval": evaluated,
+            "bound": bound}
 
 
 def _set_radius(node, value) -> dict:
@@ -176,36 +185,67 @@ def _set_frames(s, frames) -> dict:
     return s.set_frame_range(start, end)
 
 
+# A Volume SOP on 22.0.368 carries one field, described by these parms (read off a
+# fresh node): `name` (field name, default ''), `type` (menu 'float'|'int'), `rank`
+# (menu 'scalar'|'vector'|'matrix'), `initialval1` (fill value, default 0) and
+# resolution from `divsize` (one parm, default 0.1) or `divsx`/`divsy`/`divsz`
+# (default 10 each), with `dimensionsource1`/`stdswitcher1` choosing which set is
+# live. There is **no** `voxelsize` and no `gridtype` parm: the v1 recipe set
+# `voxelsize` through a guard, so it configured nothing and said nothing.
+VOLUME_FIELD = ("name", "fieldname")
+VOLUME_TYPE = ("type",)
+VOLUME_RANK = ("rank",)
+VOLUME_FILL = ("initialval1",)
+VOLUME_VOXEL = ("divsize",)
+
+
 def _pyro(s, p):
-    """Pyro source + self-contained SOP solver. Verified node names on 22.0.368."""
+    """Density volume + self-contained SOP Pyro Solver. No DOP network, no Pyro Source.
+
+    Why the chain changed from the v1.0.0 shape (all verified on 22.0.368):
+
+    * `pyrosource` has **no `snippet` parm**, so the density wrangle v1 injected was
+      skipped by a guard while the action reported the chain as configured. Fed with
+      a volume it emits 1 point carrying `pscale`, not fuel; its `densityattrib`
+      defaults to `scattering_density` and its `mode` menu is `0`/`1`/`2`.
+    * the SOP `pyrosolver` has 670 parms, none of them a resolution, cache-path or
+      dop-path parm, which is why `resolution_scale` and `cache_dir` were dropped
+      from the schema rather than bound to something invented.
+    * density therefore gets authored where the build accepts it: a Volume SOP field
+      named `density`, filled by `initialval1`, fed straight into the solver's
+      `Sources` input (input 0's label, read from the node).
+    """
     mark = len(s.created)
     geo = s.ensure_geo(p["container"])
-    src_type = _resolve_sop_type(s, geo, "pyro_source")
     solver_type = _resolve_sop_type(s, geo, "pyro_solver")
-    sphere, volume, source = s.chain(geo, ["sphere", "volume", src_type],
-                                     ["pyro_src", "pyro_vol", "pyro_source"])
-    applied = {"pyro_src.rad": _set_radius(sphere, 0.5),
-               "pyro_vol.voxelsize": _set_and_read(volume, ["voxelsize", "size"], 0.1)}
-    source.parm("snippet").set(
-        "// Give the source something to burn: density and temperature.\n"
-        "f@density = clamp(1.0 - length(@P) * 0.2, 0.0, 1.0);\n"
-        "f@temperature = 1.5;\n"
-    ) if _has(source, "snippet") else None
-    _set_display(s, source)
+    sphere, volume = s.chain(geo, ["sphere", "volume"], ["pyro_src", "pyro_vol"])
+    report = {
+        "pyro_src.rad": _set_radius(sphere, float(p["source_radius"])),
+        "pyro_vol.name": _set_and_read(volume, VOLUME_FIELD, "density"),
+        "pyro_vol.type": _set_and_read(volume, VOLUME_TYPE, "float"),
+        "pyro_vol.rank": _set_and_read(volume, VOLUME_RANK, "scalar"),
+        "pyro_vol.initialval1": _set_and_read(volume, VOLUME_FILL, float(p["density"])),
+        "pyro_vol.divsize": _set_and_read(volume, VOLUME_VOXEL, float(p["voxel_size"])),
+    }
+    _set_display(s, volume)
 
     solver = s.create(solver_type, "pyro_solver", geo)
-    solver.setInput(0, source)
+    solver.setInput(0, volume)
     return ok({
-        "source_chain": [n.path() for n in (sphere, volume, source)],
+        "source_chain": [n.path() for n in (sphere, volume)],
+        "source_field": {"name_parm": "density", "fill_parm": "initialval1",
+                         "voxel_parm": "divsize"},
         "solver": solver.path(), "solver_type": solver_type,
-        # what the solver itself says its inputs and cache knobs are
         "solver_wiring": _solver_wiring(solver),
-        # Everything this action made. No dopnet: verified absent parm means a
-        # dopnet here would be decoration, not part of the simulation.
+        # No dopnet: verified, the solver has no parm that could point at one.
         "created_nodes": s.created[mark:],
         "frames": _set_frames(s, p["frames"]),
-        "parm_report": applied,
-        "source_bounds": s.geometry_stats(source.path()).get("framed_bounds"),
+        "parm_report": report,
+        "source_stats": s.geometry_stats(volume.path()),
+        "not_verified": [
+            "the field's voxel values: hou.Volume on 22.0.368 exposes no fieldNames(), "
+            "volumePrimitive() or voxel sampler (only isHeightField), so the field is "
+            "configured by parm read-back but never read back as data"],
         "not_done": ["simulation not advanced", "no cache written",
                      "collision input not wired"],
     })

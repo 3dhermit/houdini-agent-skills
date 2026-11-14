@@ -16,7 +16,7 @@ what it did not do. It never claims a sim ran.
 ## Actions
 | action | what it builds |
 |---|---|
-| `pyro` | source chain (sphere -> volume -> density wrangle) + **Pyro Solver SOP** + frame range |
+| `pyro` | Sphere -> **Volume SOP field `density`** (`name`/`type`/`rank`/`initialval1`/`divsize`, all read back) -> **Pyro Solver SOP** on input 0 (`Sources`). Payload keys: `container, frames, source_radius, voxel_size, density` |
 | `rbd_fall` | box -> scatter sites -> Voronoi fracture -> xform (lean + lift) -> RBD Pack; the Bullet solver is deliberately **not** created (cooking it runs a sim) |
 | `flip` | sphere -> scatter -> FLIP Source -> **FLIP Solver SOP** + frame range |
 | `cache_sop` | File Cache SOP below any SOP, with path/frame parms bound by discovery |
@@ -28,7 +28,29 @@ hython -m houdini_skills.cli simulation-tools rbd_fall \
   --json '{"container":"asm_rbd","frames":[1,100],"voronoi_points":60,"lean_degrees":16}'
 ```
 
+## Pyro source: where 22.0.368 actually accepts fuel
+
+`pyrosource` is **not** in the chain, and that is a build fact rather than a style
+choice (everything below was read off a fresh node):
+
+* `pyrosource` has no `snippet` parm. v1.0.0 wrote a density wrangle into one behind a
+  `hasattr` guard: the write was skipped and the payload reported the source as
+  configured.
+* fed a volume, it outputs **0 prims / 1 point** carrying `P` and `pscale` — points,
+  not fuel. Its `mode` menu is `('0','1','2')` and `densityattrib` defaults to
+  `scattering_density`.
+* the SOP `pyrosolver` has 670 parms and none is a resolution, cache-path or dop-path
+  parm, so `voxel_size` is bound where it exists — the Volume SOP's `divsize` — and the
+  removed v1 knobs `resolution_scale`/`cache_dir` never had a home.
+* density is therefore a Volume SOP field: `name` = `density`, `type` = float,
+  `rank` = scalar, filled by `initialval1`.
+
+What the payload still cannot prove: the voxel **values**. `hou.Volume` exposes no
+`fieldNames()`, `volumePrimitive()` or `volumefields()` on this build, so `pyro`
+returns a `not_verified` list saying the field was configured by parm read-back and
+never read as data. Do not let that become a claim that density was sampled.
 ## The physics rule this skill exists to enforce
+
 Fractured pieces that start **upright, resting on the ground, with no velocity**
 will sit still forever - and that is *correct*. If a collapse "did not work",
 check the sourcing before blaming the solver. `rbd_fall` therefore always

@@ -24,7 +24,7 @@ the USD is empty.
 ## Actions
 | action | payload | returns |
 |---|---|---|
-| `export` | `path, output, container, frames, unpack, keep_layers_together, flatten_sop_layers` | absolute path, bytes, `stage` (prims, types, point counts, `self_contained`), `geometry_verified`, `knobs`, `portability_note` |
+| `export` | `path, output, container, frames, keep_layers_together, flatten_sop_layers, default_prim` | absolute path, bytes, `stage` (prims, types, point counts, `self_contained`), `geometry_verified`, `knobs`, `portability_note` |
 | `verify` | `output` | exists, bytes, and a pxr read of the stage: prim paths/types, point counts, resolved sublayer files |
 | `sopimport` | `stage, path, prim_path` | the LOP it created |
 

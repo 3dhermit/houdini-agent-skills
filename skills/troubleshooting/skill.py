@@ -604,6 +604,111 @@ KNOWLEDGE_BASE = [
                     "(traceback through hou.py line 82367); with the call wrapped, the "
                     "same loop enumerated the node's real menus",
     },
+    {
+        "id": "rop-frame-parm-ignores-plain-set",
+        "cause": "A render ROP's frame-range parms ship pre-channels. A fresh Karma "
+                 "ROP holds '$FSTART' in f1 and '$FEND' in f2, and parm.set(24) "
+                 "reports no error while changing nothing: rawValue() stays '$FEND' "
+                 "and eval() keeps following the playbar. The ROP then renders a "
+                 "range nobody asked for.",
+        "match": r"\$FSTART|\$FEND|renders the wrong frames|frame range ignored|"
+                 r"trange",
+        "fix": "Clear the channel first: parm.deleteAllKeyframes(), then set(value) - "
+               "that gave raw '31' / eval 31.0. Or write the expression deliberately "
+               "with setExpression('$FEND'). rendering.configure clears f1/f2 before "
+               "writing and reports cleared_keyframes plus a drift list, because "
+               "eval() is the only read that proves it worked.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe on a fresh karma ROP with playbar 1-40: defaults "
+                    "f1raw '$FSTART' f1eval 1.0, f2raw '$FEND' f2eval 40.0; "
+                    "set(24) and set('24') both left '$FEND' / 40.0; "
+                    "deleteAllKeyframes() then set(31) gave '31' / 31.0, which stayed "
+                    "31.0 after the playbar moved to 1-99; setExpression('$FEND') gave "
+                    "'$FEND' / 99.0. hou.Parm has no channel() and no isChannable(); "
+                    "parmTuple('f') has size 3 (f1, f2, increment) and "
+                    "t.set((3, 27)) raised hou.InvalidSize",
+    },
+    {
+        "id": "menu-eval-is-index-rawvalue-is-label",
+        "cause": "A menu parm answers two different questions and it is easy to read "
+                 "the wrong one: rawValue() returns the identifier ('float', 'scalar', "
+                 "'normal') while eval() returns the index into menuItems() (0, 0, 1). "
+                 "A helper that publishes eval() under a key called `kept` makes a "
+                 "correct menu write look like a mismatch - which is exactly how the "
+                 "v1.0.0 pyro recipe came to report type=0 for a parm holding 'float'.",
+        "match": r"menu[^\n]*(index|label|item)|drift[^\n]*(type|rank|trange)|"
+                 r"kept[^\n]*\b0\b[^\n]*(float|scalar|normal)",
+        "fix": "Compare like for like: a requested label against rawValue(), a requested "
+               "index against eval(), or resolve the selection - index into menuItems() "
+               "and compare that label. hou_api._same_value takes menu_items as that "
+               "fallback and every drift entry carries the item list the parm offered.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "live pass pyro parm_report on 22.0.368: volume `type` kept 'float' "
+                    "with eval 0, `rank` kept 'scalar' with eval 0, `name` kept 'density'; "
+                    "karma `trange` after set('normal') kept 'normal' with eval 1. The "
+                    "apparent index-in-rawValue reading came from _set_and_read returning "
+                    "eval() as `kept` before the contract was unified",
+    },
+    {
+        "id": "volume-sop-has-no-voxelsize",
+        "cause": "The SOP Volume node has no voxelsize parm and no gridtype parm. The "
+                 "pyro recipe wrote 'voxelsize' through a hasattr guard, so the source "
+                 "volume kept its default resolution while the payload implied it had "
+                 "been set.",
+        "match": r"voxelsize|resolution_scale.*ignored|volume.*resolution",
+        "fix": "A Volume SOP describes one field with `name` (default ''), `type` "
+               "('float'|'int'), `rank` ('scalar'|'vector'|'matrix'), `components` "
+               "('1') and `initialval1` (fill value, default 0). Resolution is "
+               "`divsize` (a single parm, default 0.1) or `divsx`/`divsy`/`divsz` "
+               "(default 10 each), and `dimensionsource1`/`stdswitcher1` decide which "
+               "set is live - read both back instead of assuming.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe listing a fresh volume SOP's 48 parm names: no "
+                    "voxelsize, no gridtype; divsize rawValue '0.1' with "
+                    "parmTuple('divsize') size 1; divsx/divsy/divsz '10'; "
+                    "type menuItems ('float','int'), rank menuItems "
+                    "('scalar','vector','matrix')",
+    },
+    {
+        "id": "pyrosource-has-no-snippet-parm",
+        "cause": "A Pyro Source SOP has no snippet parm, so a density wrangle "
+                 "injected into one is skipped by the guard that checks for the parm - "
+                 "and the action still reports the chain as configured. Fed a volume, "
+                 "the node emits 1 point carrying P and pscale, not fuel.",
+        "match": r"snippet.*pyro|pyrosource|density.*not.*applied|no fuel",
+        "fix": "Author density where the build accepts it: a Volume SOP field named "
+               "`density` (set `name`, `type`=float, `rank`=scalar, `initialval1`) "
+               "plugged into the SOP pyrosolver's input 0, which the node labels "
+               "'Sources'. Pyro Source is a particle source: `mode` menu '0'/'1'/'2', "
+               "`densityattrib` default 'scattering_density', `radius`, "
+               "`particlescale`.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe: src.parm('snippet') is None; mode menuItems "
+                    "('0','1','2') with raw '1'; densityattrib raw "
+                    "'scattering_density'; output per mode - 0: 0 prims / 0 points "
+                    "(attrs P, name, pscale), 1: 0 prims / 1 point (P, pscale), 2: 0 "
+                    "prims / 0 points; inputLabels() ['Geometry to Source From', "
+                    "'Rest Geometry']",
+    },
+    {
+        "id": "hou-volume-prim-has-no-field-accessor",
+        "cause": "Field values inside a hou.Volume prim cannot be read on this build: "
+                 "there is no fieldNames(), volumePrimitive() or volumefields() - the "
+                 "only name matching field/vdb is isHeightField - and hou.Geometry has "
+                 "no attribs(). An agent that trusts a guessed accessor concludes the "
+                 "field is missing.",
+        "match": r"fieldNames|volumePrimitive|volumefields|AttributeError.*Volume",
+        "fix": "Prove field **configuration** by parm read-back and say plainly that "
+               "the data was not read (simulation-tools pyro returns a not_verified "
+               "list saying so). For voxel data, go through SOPs (Volume Edit, Convert "
+               "VDB) or VEX, and never report a sampled value hou did not give you.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe on a volume SOP prim: type(pr).__name__ == 'Volume', "
+                    "type().name() 'Volume'; dir(pr) matched only 'isHeightField'; "
+                    "pr.fieldNames(), pr.volumePrimitive() and "
+                    "pr.volumePrimitive().voxelAsDouble(...) raised AttributeError; "
+                    "g.attribs() raised AttributeError; g.globalAttribs() == []",
+    },
 ]
 
 # Causes of empty geometry, checked in order by empty_geo_report.

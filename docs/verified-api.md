@@ -99,6 +99,26 @@ A successful `set()` call is **not** proof the parm holds your value. Read it ba
 request, and `sop.set_parms` passes that through. `rawValue()` gives the human label
 (`'stage'`), `eval()` gives the index (`3`) — compare the request against both.
 
+### Menu parms: `rawValue()` is the label, `eval()` is the index (22.0.368)
+
+The same menu answers two questions, and mixing them up manufactures drift:
+
+| parm | after | `rawValue()` | `eval()` |
+| --- | --- | --- | --- |
+| `karma.trange` | `set("normal")` | `'normal'` | `1` |
+| `volume.type` | `set("float")` | `'float'` | `0` |
+| `volume.rank` | `set("scalar")` | `'scalar'` | `0` |
+
+This is where a helper gets punished for its own naming: v1.0.0's
+`_set_and_read()` put `eval()` into a key called `kept`, so a correctly-set
+`type` menu reported `kept: 0` against a request of `'float'`. The contract is now
+identical in both places — `kept` = `rawValue()`, `eval` = `eval()`.
+
+Compare like for like: a label against `rawValue()`, an index against `eval()`, or
+resolve the selection by indexing `menuItems()` with the index. `hou_api._same_value`
+takes `menu_items` as that fallback and drift entries carry the item list.
+`menuItems()` raises on non-menu parms, which is how the wrapper tells the two apart.
+
 Panes are GUI-only: `hou.ui` **does not exist in hython at all**
 (`module 'hou' has no attribute 'ui'`). In a live GUI it does: `hou.ui.paneTabs()`
 returned 12 tabs and `hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)` returned
@@ -254,6 +274,89 @@ having unsaved changes.
 | reading a value | `parm.rawValue()` is safe on any type; `parm.eval()` throws on strings/menus. Menu parms: `parm.menuItems()`. |
 | menu items shape | On 22.0.368 `menuItems()` returns **bare strings**. Wrangle `class`: `('detail','primitive','point','vertex','number')`. Karma `trange`: `('off','normal','on','stage')`. File Cache `trange`: `('off','normal')`. Older builds return `(label, value)` pairs - resolve by label, never by hardcoded index. |
 | parm templates | `node.parmTemplate(name)` raises unless the name is a **parm**; for folder/menu templates use `node.parmTemplateGroup().find("class")` and `.menuItems()`. |
+
+## Volume SOP field parms (22.0.368)
+
+A `volume` SOP makes **one** field. Read off a fresh node (48 parms):
+
+| parm | value / menu |
+|---|---|
+| `name` | `''` - the field name; set it to `density` for pyro fuel |
+| `type` | menu `('float','int')` |
+| `rank` | menu `('scalar','vector','matrix')` |
+| `components` | `'1'` |
+| `initialval1` | `'0'` - the fill value (fuel amount) |
+| `divsize` | `'0.1'` - one parm; `parmTuple("divsize")` has size 1 |
+| `divsx` / `divsy` / `divsz` | `'10'` each |
+| `dimensionsource1`, `stdswitcher1` | `'0'` - choose which resolution set is live |
+
+There is **no `voxelsize`** and **no `gridtype`** parm. The v1.0.0 pyro recipe wrote
+`voxelsize` behind a `hasattr` guard: the write did nothing and the payload said the
+source was configured.
+
+`hou.Volume` prims then expose no way to check the result: `fieldNames()`,
+`volumePrimitive()` and `volumefields()` all raise AttributeError, and the only
+name on the prim matching field/vdb is `isHeightField`. `hou.Geometry` also has no
+`attribs()`. Field configuration is therefore proven by parm read-back, and the
+pyro payload carries a `not_verified` list saying the voxel data was never read.
+
+## Pyro Source SOP on 22.0.368
+
+`pyrosource` is a particle source, not a fuel author:
+
+| fact | value |
+|---|---|
+| `snippet` parm | **absent** (`src.parm("snippet") is None`) - a wrangle injected there is silently skipped |
+| `mode` menu | `('0','1','2')`, default `'1'` |
+| `densityattrib` | default `'scattering_density'` |
+| other parms | `radius` `'0.1'`, `particlescale` `'2'` |
+| `inputLabels()` | `['Geometry to Source From', 'Rest Geometry']` |
+| output fed a Volume SOP | 0 prims / 1 point carrying `P`, `pscale` |
+
+The SOP `pyrosolver`'s input 0 is labelled `Sources` and takes the density-carrying
+volume directly, which is what the builder wires now.
+
+### Current frame vs frame range (22.0.368)
+
+| question | accessor | verified |
+| --- | --- | --- |
+| current frame | `hou.frame()` → `1.0`, and `hou.time()` → `0.0` (seconds) | module-level, not on a node |
+| set it | `hou.setFrame(frame)` / `hou.setTime(time)` — `setFrame()` with no argument raises `TypeError: missing 1 required positional argument: 'frame'` | |
+| frame range | `hou.playbar.frameRange()` → `hou.Vector2`; `hou.playbar.setFrameRange(start, end)` | |
+| current frame on the playbar | **absent** — `hou.playbar.frame()` raises `AttributeError: 'playbar' object has no attribute 'frame'`; the playbar offers `timeRange()`, `timelineRange()`, `frameRange()`, `frameIncrement()`, `frameBookmark()` | |
+| current frame on the context node | **absent** — `hou.pwd().frame()` raises `AttributeError: 'OpNode' object has no attribute 'frame'`. A live session's `hou.pwd()` is whatever node the UI is sitting on (it was `/obj/rbd/rbd_solver1` here), so it is not a safe handle either | |
+
+Conversion helpers that do exist: `hou.frameToTime`, `hou.timeToFrame`,
+`hou.frameTolerance`, `hou.timeTolerance`, `hou.intFrame`.
+
+## Render ROP reality (22.0.368)
+
+Read off a freshly created `karma` ROP in `/out` (405 parms):
+
+| question | answer |
+|---|---|
+| A parm naming the geometry/LOP to render? | **No.** No `soppath`, no `lophotoflame`; the only parms containing "path" are `mkpath` (make output dirs) and `pathtracedsamples`. What renders comes from the LOP context's displayed output plus the ROP's object scope. |
+| Camera | `camera` parm, default `'/obj/cam1'`; also `dicingcamera`, `usedicingcamera`, `override_camerares` |
+| Object scope | `objects` (empty), `candobjects` (`'*'`), `excludeobjects` (empty) |
+| Stage-driven settings | `samplesfromstage` = `'on'`, `trange` menu `('off','normal','on','stage')` |
+| Frame range | `f1`/`f2` arrive **channelled**: defaults hold `'$FSTART'` / `'$FEND'`. `set(24)` raised nothing and changed nothing (rawValue stayed `'$FEND'`, eval 40.0). `deleteAllKeyframes()` then `set(31)` gave raw `'31'` / eval 31.0; `setExpression('$FEND')` gave `'$FEND'` / 99.0 after the playbar moved. `parmTuple("f")` is size 3 (f1, f2, increment) and `t.set((3, 27))` raises `hou.InvalidSize`. `hou.Parm` has no `channel()` and no `isChannable()` |
+| XPU vs CPU | no parm: no `renderer`, `rendermethod`, `schedule` or any `*xpu*` parm, and no `karma_xpu` node type |
+
+`rendering.configure` therefore exposes `camera` (verified) and **not** a scene-source
+`path` knob - that key shipped in v1.0.0, was never read by any code, and is gone.
+
+## Pyro Solver SOP parm reality (22.0.368)
+
+A fresh `pyrosolver` SOP node reports **670 parms**, and among them there is **no**
+resolution, voxel, upres or cache-path parm: `voxel` and `upres` never occur, and no
+parm starts with `sim`, `geo` or `data`. Cache-related names are only `cacheenabled`,
+`cachemaxsize`, `checkpoint_basedir` (default `'$HIP/geo'`), `checkpoint_openbasedir`,
+`checkpoint_version`, `checkpoint_explicitcachensteps`,
+`checkpoint_explicitcachespacing`.
+
+So `pyro`'s v1.0.0 knobs `resolution_scale` and `cache_dir` had nothing to bind to.
+They are removed from the schema; source resolution goes where it is real - the
+Volume SOP's `voxelsize`, which the builder binds and reads back.
 
 ## Geometry
 

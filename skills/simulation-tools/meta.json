@@ -56,15 +56,23 @@
             100
           ]
         },
-        "cache_dir": {
-          "type": "string",
-          "default": ""
-        },
-        "resolution_scale": {
+        "source_radius": {
           "type": "number",
+          "minimum": 0.01,
           "default": 0.5,
-          "minimum": 0.05,
-          "maximum": 4.0
+          "description": "Source sphere radius, bound to the Sphere SOP's `rad` tuple and read back."
+        },
+        "voxel_size": {
+          "type": "number",
+          "minimum": 0.001,
+          "default": 0.1,
+          "description": "Volume SOP `divsize` (verified: a single parm, default 0.1). This build has no `voxelsize` parm; `divsx/y/z` stay at 10 unless `dimensionsource1`/`stdswitcher1` say otherwise, and both read-backs are reported."
+        },
+        "density": {
+          "type": "number",
+          "minimum": 0.0,
+          "default": 1.0,
+          "description": "Value written to the Volume SOP's `initialval1`, i.e. how much fuel the source field starts with."
         }
       }
     },

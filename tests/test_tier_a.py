@@ -11,7 +11,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import pathlib
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -306,6 +308,111 @@ class TestSkillTreeCheck(unittest.TestCase):
             for f in os.listdir(cache):
                 os.remove(os.path.join(cache, f))
             os.rmdir(cache)
+
+
+class TestKnowledgeBase(unittest.TestCase):
+    """The KB is only useful if its regexes compile and still fire on real text."""
+
+    def _troub(self):
+        from skills import import_skill_module
+        return import_skill_module("troubleshooting")
+
+    def test_every_entry_has_a_compiling_match(self):
+        import re
+        troub = self._troub()
+        for entry in troub.KNOWLEDGE_BASE:
+            self.assertTrue(entry.get("id"), "KB entry without an id")
+            self.assertTrue(entry.get("cause") and entry.get("fix"),
+                            f"{entry['id']}: cause/fix missing")
+            try:
+                re.compile(entry["match"])
+            except re.error as exc:
+                self.fail(f"{entry['id']}: match does not compile: {exc}")
+
+    def test_the_h22_findings_fire_on_real_error_text(self):
+        """Each entry added for a 22.0.368 defect must hit the message it describes."""
+        troub = self._troub()
+        by_id = {e["id"]: e for e in troub.KNOWLEDGE_BASE}
+        cases = {
+            "rop-frame-parm-ignores-plain-set":
+                "karma renders $FSTART to $FEND, not the range I set",
+            "menu-eval-is-index-rawvalue-is-label":
+                "drift reported for type: expected 'float', kept 0",
+            "volume-sop-has-no-voxelsize":
+                "volume1 has no parm voxelsize",
+            "pyrosource-has-no-snippet-parm":
+                "AttributeError: 'SopNode' object has no attribute snippet for pyrosource1",
+            "hou-volume-prim-has-no-field-accessor":
+                "AttributeError: 'Volume' object has no attribute 'fieldNames'",
+        }
+        for kid, text in cases.items():
+            self.assertIn(kid, by_id, f"KB entry {kid} was dropped")
+            self.assertRegex(text, by_id[kid]["match"])
+
+
+class TestPayloadKnobAudit(unittest.TestCase):
+    """A schema key nothing reads is a knob an agent believes it turned.
+
+    v1.0.0 shipped three of them: `simulation-tools pyro` advertised `cache_dir`
+    and `resolution_scale` (and on 22.0.368 the Pyro Solver SOP has no resolution
+    or cache-path parm among its 670 parms to bind them to), and
+    `rendering configure` advertised `path` ("geometry or LOP to render") while
+    nothing read it. The audit is the guard; these tests pin the guard itself.
+    """
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _tool(self):
+        path = os.path.join(self.ROOT, "tools", "check_payload_knobs.py")
+        spec = importlib.util.spec_from_file_location("check_payload_knobs", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _fixture(self, tmp, skill_src, props):
+        d = os.path.join(tmp, "skills", "fake")
+        os.makedirs(d)
+        with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+            json.dump({"name": "fake", "actions": {"go": {"properties": props}}}, fh)
+        with open(os.path.join(d, "skill.py"), "w", encoding="utf-8") as fh:
+            fh.write(skill_src)
+        return tmp
+
+    def test_repo_ships_no_unread_knobs(self):
+        problems = self._tool().check(pathlib.Path(self.ROOT))
+        self.assertEqual(problems, [], "declared knobs nothing reads: %s" % problems)
+
+    def test_lie_is_flagged(self):
+        tool = self._tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._fixture(tmp, 'def _go(s, p):\n    return {"ok": True}\n'
+                               '_HANDLERS = {"go": _go}\n',
+                          {"path": {"type": "string"}, "size": {"type": "number"}})
+            problems = tool.check(pathlib.Path(tmp))
+        text = "\n".join(problems)
+        self.assertEqual(len(problems), 2, problems)
+        self.assertIn("declares 'path'", text)
+        self.assertIn("declares 'size'", text)
+
+    def test_indirection_counts_as_reading(self):
+        tool = self._tool()
+        src = ('def _go(s, p):\n    return _inner(s, p)\n\n'
+               'def _inner(s, p):\n    return {"path": p["path"]}\n\n'
+               '_HANDLERS = {"go": _go}\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            self._fixture(tmp, src, {"path": {"type": "string"}})
+            self.assertEqual(tool.check(pathlib.Path(tmp)), [])
+
+    def test_missing_handler_mapping_is_flagged(self):
+        # Without _HANDLERS the audit cannot follow action -> code at all, so it
+        # must say so instead of reporting a clean tree.
+        tool = self._tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._fixture(tmp, 'def run(a, p):\n    return {}\n',
+                          {"path": {"type": "string"}})
+            problems = tool.check(pathlib.Path(tmp))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("no _HANDLERS entry", problems[0])
 
 
 if __name__ == "__main__":

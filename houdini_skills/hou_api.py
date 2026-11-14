@@ -22,9 +22,15 @@ from .errors import SkillFailure, hou_name_error, parse_node_errors, suggest
 from .versions import HoudiniVersion, check_supported, require_hou
 
 
-def _same_value(requested, raw, evaluated) -> bool:
-    """Did the parm keep what was asked? Menu parms report labels in rawValue() and an
-    index in eval(), so both are needed; string parms compare on rawValue() alone."""
+def _same_value(requested, raw, evaluated, menu_items=None) -> bool:
+    """Did the parm keep what was asked?
+
+    Menu parms report two ways at once on this build: rawValue() is the identifier
+    ('normal', 'float', 'scalar') and eval() is the index into menuItems() (1, 0, 0).
+    A label request compared against only one of them can call a correct write drift,
+    so the label is checked directly and, as a fallback, resolved through
+    `menu_items` at whichever index the parm reports.
+    """
     if isinstance(requested, bool):
         requested = 1 if requested else 0
     if isinstance(requested, (int, float)):
@@ -33,7 +39,22 @@ def _same_value(requested, raw, evaluated) -> bool:
         return str(evaluated) == str(requested)
     if isinstance(requested, (list, tuple)):
         return [str(x) for x in requested] == [str(x) for x in (evaluated or [])]
-    return str(requested) == str(raw)
+    text = str(requested)
+    if str(raw) == text:
+        return True
+    for candidate in (evaluated, raw):
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int):
+            index = candidate
+        else:
+            try:
+                index = int(float(str(candidate)))
+            except (TypeError, ValueError):
+                continue
+        if menu_items and 0 <= index < len(menu_items) and str(menu_items[index]) == text:
+            return True
+    return False
 
 
 def _parm_names(node) -> set[str]:
@@ -234,9 +255,16 @@ class Session:
         for key, value in applied.items():
             p2 = n.parm(key)
             raw, evaluated = p2.rawValue(), p2.eval()
+            try:
+                # menuItems() raises on non-menu parms, which is how this build
+                # tells them apart; None then means "compare values directly".
+                menu_items = list(p2.menuItems())
+            except Exception:
+                menu_items = None
             kept[key] = raw
-            if not _same_value(value, raw, evaluated):
-                drift[key] = {"requested": value, "kept": raw, "eval": evaluated}
+            if not _same_value(value, raw, evaluated, menu_items):
+                drift[key] = {"requested": value, "kept": raw, "eval": evaluated,
+                              "menu": menu_items if menu_items else None}
         return {"set": sorted(applied), "kept": kept, "drift": drift}
 
     def read_parms(self, path: str, names: list[str] | None = None) -> dict:

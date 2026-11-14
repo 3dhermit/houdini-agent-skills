@@ -18,7 +18,7 @@ mantra rather than creating a node type that isn't there.
 ## Actions
 | action | payload |
 |---|---|
-| `configure` | `engine, resolution, frames, output_path, samples, aovs` |
+| `configure` | `engine, resolution, frames, output_path, samples, aovs, camera` — `applied` reports `{parm, requested, kept, eval}` read back off the node, never an echo |
 | `inspect` | `path` |
 | `list_engines` | `{}` |
 
@@ -33,11 +33,34 @@ hython -m houdini_skills.cli rendering configure \
 | resolution | `resolutionx` / `resolutiony` |
 | samples | `samplesperpixel` (**not** `samples`) |
 | output file | `picture` (**not** `outputpath`) |
-| frame range | `trange` (menu: `off, normal, on, stage`) + `f1` / `f2` |
+| frame range | `trange` (menu: `off, normal, on, stage`) + `f1` / `f2` — **both arrive channelled** (`'$FSTART'` / `'$FEND'`); see below |
+| camera | `camera` (default `'/obj/cam1'`) — the only scene-selection parm this ROP has; there is **no** `soppath`/`lophotoflame` among its 405 parms, so v1's `path` payload key never did anything and is gone |
 | execute | `execute` **and** `render` both exist on the Karma ROP; the skill's `next_step` points at `execute`, same name the USD ROP uses |
 
 Anything the skill could not bind is listed under `unresolved` in the result.
 Read that list; do not assume the render is configured.
+
+## `frames` needs the ROP's channels cleared (22.0.368)
+
+A freshly created Karma ROP holds expressions in its range parms — `f1` = `'$FSTART'`,
+`f2` = `'$FEND'` — and a plain `set()` on them **does nothing without raising**:
+`set(24)` left `rawValue()` at `'$FEND'` and `eval()` at 40.0, i.e. the scene range.
+Verified fix order:
+
+```python
+rop.parm("trange").set("normal")   # menu: 'off' by default
+rop.parm("f2").deleteAllKeyframes()
+rop.parm("f2").set(24)             # now rawValue() '24', eval() 24.0
+```
+
+`configure` does that for `f1`/`f2` and marks the entries
+`"cleared_keyframes": true`. That is safe on a ROP this action just created; if you
+aim it at an animated ROP you own, its frame-range animation goes with the channels.
+The payload also returns `drift`: the knobs whose `eval()` did not come back equal to
+what was asked. `drift: []` is the proof the numbers landed.
+
+`parmTuple("f")` is size 3 (f1, f2, increment), so `t.set((3, 27))` raises
+`hou.InvalidSize` — write the two parms separately.
 
 ## The drift runs both directions (verified on 22.0.368)
 

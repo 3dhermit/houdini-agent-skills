@@ -27,7 +27,7 @@ Configure a Karma (or mantra) Render Output ROP: driver, resolution, frame range
 - "point a render rop at my geo"
 
 **Actions** (payload schema lives in `skills/rendering/meta.json`)
-- `configure` - required: none; optional: aovs, container, engine, frames, output_path, path, resolution, samples
+- `configure` - required: none; optional: aovs, camera, container, engine, frames, output_path, resolution, samples
 - `inspect` - required: path; optional: none
 - `list_engines` - required: none; optional: none
 
@@ -55,7 +55,7 @@ Set up Pyro / RBD / FLIP objects, frame range and File Cache paths with version-
 - `cache_sop` - required: path, cache_path; optional: frames
 - `flip` - required: none; optional: container, frames, site_count
 - `probe_types` - required: none; optional: contains
-- `pyro` - required: none; optional: cache_dir, container, frames, resolution_scale
+- `pyro` - required: none; optional: container, density, frames, source_radius, voxel_size
 - `rbd_fall` - required: none; optional: container, drop_distance, frames, lean_degrees, voronoi_points
 - `set_frame_range` - required: frames; optional: none
 
@@ -144,7 +144,7 @@ Export Houdini SOP geometry to USD and report what landed on disk; Solaris sopim
 - "usd asset from houdini"
 
 **Actions** (payload schema lives in `skills/usd-pipeline/meta.json`)
-- `export` - required: path; optional: container, default_prim, flatten_sop_layers, frames, keep_layers_together, output, unpack
+- `export` - required: path; optional: container, default_prim, flatten_sop_layers, frames, keep_layers_together, output
 - `sopimport` - required: path; optional: prim_path, stage
 - `verify` - required: output; optional: none
 

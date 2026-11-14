@@ -37,6 +37,11 @@ jobs:
         # tier A test - CI used to inline this walk and counted skills/__pycache__
         # as a skill folder, which failed the v1.0.0 tag push on all three Pythons.
         run: python tools/check_skills.py
+      - name: Every declared payload knob is actually read
+        # A schema key nothing reads is a lie an agent can act on: v1.0.0 shipped
+        # pyro `cache_dir`/`resolution_scale` and rendering `path` that no code
+        # touched. tools/check_payload_knobs.py is covered by a tier A test.
+        run: python tools/check_payload_knobs.py
 
   tier-b:
     name: Tier B (real Houdini, self-hosted)
