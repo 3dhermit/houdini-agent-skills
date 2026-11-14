@@ -426,7 +426,9 @@ class Session:
             raise SkillFailure("hou_error", f"{path}: no geometry ({exc})", source="geometry")
         if geo is None:
             raise SkillFailure("no_geometry", f"{path} has no geometry to read",
-                               hint="is the display flag on a SOP node?")
+                               hint="an uncooked SOP-level solver (verified: flipsolver) "
+                                    "exposes no geometry until it is stepped; otherwise "
+                                    "check the display flag on a SOP node")
         prims = list(geo.prims())
         names = set()
         for p in prims:
@@ -440,10 +442,21 @@ class Session:
             packed = sum(1 for p in prims if isinstance(p, packed_cls))
         except Exception:
             packed = None
+        # Counts alone mislead: a FLIP Source SOP holds exactly 1 prim and 1 point,
+        # because that prim is a VDB volume - not a broken chain. prim_types is what
+        # tells "one volume" apart from "one polygon" or "one point".
+        prim_types: dict = {}
+        for p in prims:
+            try:
+                key = p.type().name()
+            except Exception:
+                key = "unknown"
+            prim_types[key] = prim_types.get(key, 0) + 1
         out = {
             "path": path,
             "type": self._type(n),
             "prim_count": len(prims),
+            "prim_types": prim_types,
             "point_count": len(geo.points()),
             "packed_count": packed,
             "piece_count_by_name": len(names) if names else None,

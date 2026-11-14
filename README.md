@@ -14,7 +14,7 @@ registry says so per skill.
 skills/
   sop-automation/     create + wire SOPs, set parms, read geometry counts
   vex-helper/         generate VEX, static-lint it, compile-check it for real
-  simulation-tools/   pyro / rbd / flip source+solver chains, dopnet, File Cache
+  simulation-tools/   pyro / rbd / flip source + self-contained SOP solver chains, File Cache
   rendering/          Karma / mantra ROP configuration (config only, never renders)
   usd-pipeline/       SOP -> Solaris SOP Import -> USD ROP, proven on disk
   troubleshooting/    red nodes, wrong parm/type/API names, tiered error KB
@@ -115,8 +115,8 @@ copied. Full rules in `docs/contributing.md`.
 ## Known v1 limitations
 
 - Verified only on Houdini 22.0.368 (Windows). 19.5-21.x are declared, not tested.
-- `simulation-tools` builds and cooks source/solver chains and creates a `dopnet`;
-  it does not author the DOP graph or step a simulation.
+- `simulation-tools` builds source/solver chains (`pyrosolver`, `flipsolver` SOP solvers; the RBD Bullet solver is left for you to create and cook);
+  it does not change solver settings or step a simulation.
 - `rendering` configures ROPs and never renders; Karma AOV authoring is
   explicitly out of v1.
 - `usd-pipeline` proves one file landed; multi-file layer stacks and MaterialX

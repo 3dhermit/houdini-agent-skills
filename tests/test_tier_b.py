@@ -682,8 +682,16 @@ class TestCreatedNodeAccounting(unittest.TestCase):
                                         "drop_distance": 0.5})
         made = out["created_nodes"]
         self.assertIn("/obj/asm_t_dop", made)
-        self.assertIn(out["dopnet"], made)
-        self.assertNotEqual(out["dopnet"], "/obj/asm_t_dop")
+        # The dead dopnet is gone. Verified on 22.0.368: pyrosolver/flipsolver/
+        # rbdbulletsolver instances expose no dop-related parm at all, so the dopnet
+        # the builders used to create was an empty object nothing drove (its only
+        # child was `file_output`) while the payload called it "dop_link: unresolved".
+        self.assertEqual([p for p in made if p.endswith("_dopnet")], [],
+                         "a simulation builder created an unused dopnet again")
+        # every node the result points at must be in the undo list
+        for key in ("fracture_node", "pack"):
+            if out.get(key):
+                self.assertIn(out[key], made, f"{key} missing from created_nodes")
         for path in made:
             self.assertIsNotNone(self.hou.node(path), f"{path} reported but absent")
 
@@ -979,6 +987,83 @@ class TestHoudini22ApiSpellings(unittest.TestCase):
         self.assertFalse(hasattr(hou, "NodeConnector"),
                          "hou.NodeConnector is back; the rename note can go")
         self.assertTrue(hasattr(hou, "NodeConnection"))
+
+    def test_sop_level_solvers_have_no_dop_parm_and_named_inputs(self):
+        """The builders no longer create a dopnet, and this pins why.
+
+        Live 22.0.368 read of the SOP solver instances: no dop-related parm exists,
+        and each solver names its own inputs. The FLIP/Pyro builders rely on that.
+        """
+        sim = import_skill_module("simulation-tools")
+        geo = self.s.ensure_geo("asm22_solverfacts")
+        try:
+            for solver_type, wanted in (("flipsolver", ["Sources", "Container",
+                                                        "Collisions", "Boundary Flow"]),
+                                        ("pyrosolver", ["Sources",
+                                                        "Collision Geometry/Volumes"]),
+                                        ("rbdbulletsolver", ["Geometry",
+                                                             "Constraint Geometry",
+                                                             "Proxy Geometry",
+                                                             "Collision Geometry",
+                                                             "Guide Sim"])):
+                node = self.hou.node(geo).createNode(solver_type, "probe_" + solver_type)
+                try:
+                    wiring = sim._solver_wiring(node)
+                    self.assertEqual(wiring["input_labels"], wanted,
+                                     f"{solver_type} input labels moved")
+                    self.assertEqual(wiring["dop_parms"], [],
+                                     f"{solver_type} grew a dop parm - revisit the builders")
+                    self.assertTrue(wiring["cache_parms"],
+                                    f"{solver_type} exposes no cache knobs")
+                    self.assertFalse(wiring["labels_from_probe_only"])
+                finally:
+                    node.destroy()
+        finally:
+            self.s.destroy_matching("/obj/asm22_solverfacts*")
+
+    def test_set_radius_uses_the_parm_tuple_and_reads_back(self):
+        """node.parm('rad') is None on a Sphere; the tuple is the only way in."""
+        sim = import_skill_module("simulation-tools")
+        geo = self.s.ensure_geo("asm22_rad")
+        try:
+            sphere = self.hou.node(geo).createNode("sphere", "probe_sphere")
+            self.assertIsNone(sphere.parm("rad"),
+                              "rad stopped being a ParmTuple - _set_radius can simplify")
+            self.assertEqual(sphere.parmTuple("rad").eval(), (1.0, 1.0, 1.0))
+            report = sim._set_radius(sphere, 0.5)
+            self.assertTrue(report["bound"])
+            self.assertEqual(report["kept"], [0.5, 0.5, 0.5],
+                             "_set_radius reported a value hou did not keep")
+            # and the child parms are the same numbers, read individually
+            self.assertEqual([sphere.parm(n).eval() for n in ("radx", "rady", "radz")],
+                             [0.5, 0.5, 0.5])
+        finally:
+            self.s.destroy_matching("/obj/asm22_rad*")
+
+    def test_flip_builder_makes_a_real_solver_and_no_dopnet(self):
+        """live pass 4 found the FLIP build empty: dopnet with one child, unresolved
+        link, no read-backs. This pins the repaired shape."""
+        sim = import_skill_module("simulation-tools")
+        out = sim.run("flip", {"container": "asm22_flipv2", "site_count": 40,
+                               "frames": [1, 12]})
+        try:
+            self.assertEqual([p for p in out["created_nodes"]
+                              if p.endswith("_dopnet")], [])
+            self.assertEqual(out["solver_type"], "flipsolver")
+            self.assertEqual(out["site_points"], 40,
+                             "site_count never reached the Scatter SOP")
+            self.assertEqual(out["parm_report"]["flip_src.rad"]["kept"],
+                             [0.5, 0.5, 0.5])
+            self.assertEqual(out["parm_report"]["flip_points.npts"]["kept"], 40)
+            self.assertEqual(out["solver_wiring"]["input_labels"][0], "Sources")
+            self.assertEqual(out["solver_wiring"]["dop_parms"], [])
+            # the FLIP Source SOP's single prim is a VDB volume, not lost geometry
+            self.assertEqual(out["source_stats"]["prim_types"], {"VDB": 1},
+                             "FLIP Source output shape moved - recheck what counts as a "
+                             "broken source chain")
+            self.assertIn("simulation not advanced", out["not_done"])
+        finally:
+            self.s.destroy_matching("/obj/asm22_flipv2*")
 
     def test_find_is_a_path_glob_not_a_substring(self):
         self.s.ensure_geo("asm22_find")

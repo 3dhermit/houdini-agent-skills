@@ -53,7 +53,7 @@ Set up Pyro / RBD / FLIP objects, frame range and File Cache paths with version-
 
 **Actions** (payload schema lives in `skills/simulation-tools/meta.json`)
 - `cache_sop` - required: path, cache_path; optional: frames
-- `flip` - required: none; optional: container, frames
+- `flip` - required: none; optional: container, frames, site_count
 - `probe_types` - required: none; optional: contains
 - `pyro` - required: none; optional: cache_dir, container, frames, resolution_scale
 - `rbd_fall` - required: none; optional: container, drop_distance, frames, lean_degrees, voronoi_points

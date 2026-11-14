@@ -2,67 +2,179 @@
   "name": "simulation-tools",
   "version": "1.0.0",
   "description": "Set up Pyro / RBD / FLIP objects, frame range and File Cache paths with version-discovered node names.",
-  "houdini_versions": ["19.5", "20.0", "20.5", "21.0", "22.0"],
-  "verified_on": ["22.0.368"],
-  "dependencies": ["houdini_skills"],
+  "houdini_versions": [
+    "19.5",
+    "20.0",
+    "20.5",
+    "21.0",
+    "22.0"
+  ],
+  "verified_on": [
+    "22.0.368"
+  ],
+  "dependencies": [
+    "houdini_skills"
+  ],
   "triggers": [
-    "set up a pyro sim", "rbd fracture and fall", "flip setup",
-    "cache this sim to disk", "set the sim frame range"
+    "set up a pyro sim",
+    "rbd fracture and fall",
+    "flip setup",
+    "cache this sim to disk",
+    "set the sim frame range"
   ],
   "examples": [
     "hython -m houdini_skills.cli simulation-tools rbd_fall --json '{\"container\":\"asm_rbd\",\"frames\":[1,100]}'",
     "hython -m houdini_skills.cli simulation-tools pyro --json '{\"container\":\"asm_pyro\"}'"
   ],
   "sources": [
-    {"repo": "https://github.com/healkeiser/fxhoudinimcp", "license": "MIT", "used_for": "naming parity with setup_pyro_sim/setup_rbd_sim/setup_flip_sim; independent implementation"},
-    {"repo": "https://github.com/stevedatelier/Houdini-Simulations", "license": "none (all rights reserved)", "used_for": "NOTHING - cited as demand evidence only"}
+    {
+      "repo": "https://github.com/healkeiser/fxhoudinimcp",
+      "license": "MIT",
+      "used_for": "naming parity with setup_pyro_sim/setup_rbd_sim/setup_flip_sim; independent implementation"
+    },
+    {
+      "repo": "https://github.com/stevedatelier/Houdini-Simulations",
+      "license": "none (all rights reserved)",
+      "used_for": "NOTHING - cited as demand evidence only"
+    }
   ],
   "actions": {
     "pyro": {
       "type": "object",
       "properties": {
-        "container": {"type": "string", "default": "asm_pyro"},
-        "frames": {"type": "array", "items": {"type": "number"}, "default": [1, 100]},
-        "cache_dir": {"type": "string", "default": ""},
-        "resolution_scale": {"type": "number", "default": 0.5, "minimum": 0.05, "maximum": 4.0}
+        "container": {
+          "type": "string",
+          "default": "asm_pyro"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            1,
+            100
+          ]
+        },
+        "cache_dir": {
+          "type": "string",
+          "default": ""
+        },
+        "resolution_scale": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.05,
+          "maximum": 4.0
+        }
       }
     },
     "rbd_fall": {
       "type": "object",
       "properties": {
-        "container": {"type": "string", "default": "asm_rbd"},
-        "frames": {"type": "array", "items": {"type": "number"}, "default": [1, 100]},
-        "voronoi_points": {"type": "integer", "default": 40, "minimum": 1, "maximum": 2000},
-        "lean_degrees": {"type": "number", "default": 14, "minimum": 0, "maximum": 45},
-        "drop_distance": {"type": "number", "default": 1.5, "minimum": 0}
+        "container": {
+          "type": "string",
+          "default": "asm_rbd"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            1,
+            100
+          ]
+        },
+        "voronoi_points": {
+          "type": "integer",
+          "default": 40,
+          "minimum": 1,
+          "maximum": 2000
+        },
+        "lean_degrees": {
+          "type": "number",
+          "default": 14,
+          "minimum": 0,
+          "maximum": 45
+        },
+        "drop_distance": {
+          "type": "number",
+          "default": 1.5,
+          "minimum": 0
+        }
       }
     },
     "flip": {
       "type": "object",
       "properties": {
-        "container": {"type": "string", "default": "asm_flip"},
-        "frames": {"type": "array", "items": {"type": "number"}, "default": [1, 80]}
+        "container": {
+          "type": "string",
+          "default": "asm_flip"
+        },
+        "site_count": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2000,
+          "description": "seed points for the FLIP source; bound to the Scatter SOP's `npts` parm on 22.0.368 and read back, since `number` is absent"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            1,
+            80
+          ]
+        }
       }
     },
     "set_frame_range": {
       "type": "object",
-      "required": ["frames"],
+      "required": [
+        "frames"
+      ],
       "properties": {
-        "frames": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
       }
     },
     "cache_sop": {
       "type": "object",
-      "required": ["path", "cache_path"],
+      "required": [
+        "path",
+        "cache_path"
+      ],
       "properties": {
-        "path": {"type": "string", "description": "SOP node to attach a File Cache downstream of"},
-        "cache_path": {"type": "string"},
-        "frames": {"type": "array", "items": {"type": "number"}}
+        "path": {
+          "type": "string",
+          "description": "SOP node to attach a File Cache downstream of"
+        },
+        "cache_path": {
+          "type": "string"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
       }
     },
     "probe_types": {
       "type": "object",
-      "properties": {"contains": {"type": "string", "default": ""}}
+      "properties": {
+        "contains": {
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }

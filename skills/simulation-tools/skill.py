@@ -23,7 +23,6 @@ SUPPORTED = series_range((19, 5), (22, 0))
 
 # VERIFIED on 22.0.368: hou.objNodeTypeCategory() has NO 'pyro'/'rbd'/'flip'.
 # The only simulation object is 'dopnet'; sources and solvers are SOPs.
-DOPNET_TYPE = ["dopnet"]
 SOP_TYPES = {
     "pyro_source": ["pyrosource"],
     "pyro_solver": ["pyrosolver"],
@@ -35,6 +34,90 @@ SOP_TYPES = {
     "vellum_solver": ["vellumsolver"],
     "file_cache": ["filecache"],
 }
+# Read off 22.0.368 by creating each SOP solver and calling node.inputLabels().
+# Wiring a source into the wrong input index is how a solver cooks clean and does
+# nothing, so every builder hands these back to the caller.
+# These solvers expose NO dop-related parm on 22.0.368 (probed instance parm names:
+# doppath, simroot, dopnet, outputdop all absent). Do not add a dopnet or a
+# dop-linking helper back: a live run showed the extra dopnet held only
+# `file_output` and its "link" could never resolve.
+SOLVER_INPUT_LABELS = {
+    "pyrosolver": ["Sources", "Collision Geometry/Volumes"],
+    "flipsolver": ["Sources", "Container", "Collisions", "Boundary Flow"],
+    "rbdbulletsolver": ["Geometry", "Constraint Geometry", "Proxy Geometry",
+                        "Collision Geometry", "Guide Sim"],
+}
+
+
+def _solver_wiring(solver) -> dict:
+    """What this build's solver reports for its own inputs and cache knobs.
+
+    Verified on 22.0.368: these SOP-level solvers expose NO dop-related parm
+    (`doppath`, `simroot`, `dopnet`, `outputdop` are all absent from the instance).
+    They run the simulation themselves and cache through cacheenabled /
+    cachemaxsize / checkpoint_* / explicitcache*. A dopnet beside them is an empty
+    node nothing drives - a live run proved its only child was `file_output`.
+    """
+    labels = []
+    try:
+        labels = list(solver.inputLabels())
+    except Exception:
+        pass
+    names = set()
+    try:
+        names = {p.name() for p in solver.parms()}
+    except Exception:
+        pass
+    return {
+        "input_labels": labels or SOLVER_INPUT_LABELS.get(solver.type().name(), []),
+        "labels_from_probe_only": not labels,
+        "cache_parms": sorted(n for n in names
+                               if n.startswith(("cache", "checkpoint", "explicitcache")))[:12],
+        "dop_parms": sorted(n for n in names if "dop" in n.lower()),
+        "note": "SOP-level solvers on 22.0.368 are self-contained: no dop-path parm "
+                "exists, so no dopnet is created or needed; step the cache to advance",
+    }
+
+
+def _set_and_read(node, candidates, value) -> dict:
+    """Set the first parm name that exists, then read it back.
+
+    `kept` is hou's answer afterwards, never the requested value: hou clamps
+    out-of-range numbers silently and raises TypeError on a fraction in an int parm.
+    """
+    parm, bound = _set_any(node, candidates, value)
+    kept = None
+    if bound:
+        try:
+            kept = node.parm(parm).eval()
+        except Exception:
+            kept = None
+    return {"parm": parm, "requested": value, "kept": kept, "bound": bound}
+
+
+def _set_radius(node, value) -> dict:
+    """Set a uniform radius/size on a primitive SOP.
+
+    On 22.0.368 these are ParmTuples: sphere.parm("rad") is None while
+    sphere.parmTuple("rad").eval() is (1.0, 1.0, 1.0), with children radx/rady/radz.
+    Setting "rad" through node.parm() used to return False and leave the node at its
+    default, which read as a sizing result rather than a no-op.
+    """
+    for tup in ("rad", "size", "scale"):
+        t = node.parmTuple(tup)
+        if t is None:
+            continue
+        try:
+            if len(t) == 1:
+                t.set((value,))
+            else:
+                t.set((value,) * len(t))
+            return {"parm": t.name(), "requested": value, "kept": list(t.eval()),
+                    "bound": True}
+        except Exception:
+            continue
+    return _set_and_read(node, ["radx", "radius", "r"], value)
+
 FILECACHE_PARMS = {
     # Verified on 22.0.368, filecache::2.0: the path parm is 'sopoutput' and the
     # range parms are 'f1'/'f2' with the menu 'trange' ('off', 'normal').
@@ -86,17 +169,6 @@ def _resolve_sop_type(s, geo_path: str, kind: str) -> str:
     )
 
 
-def _dopnet(s, container: str) -> str:
-    """Create the one simulation object Houdini actually has: a DOP Network."""
-    names = _obj_types(s)
-    kind = next((c for c in DOPNET_TYPE if c in names), "")
-    if not kind:
-        raise SkillFailure("node_type_unavailable", f"no 'dopnet' object type on {s.version}",
-                           hint="OBJ types containing 'dop': "
-                                + ", ".join(n for n in sorted(names) if "dop" in n.lower()))
-    return s.create(kind, f"{container}_dopnet", "/obj").path()
-
-
 def _set_frames(s, frames) -> dict:
     start, end = float(frames[0]), float(frames[1])
     if end < start:
@@ -105,16 +177,15 @@ def _set_frames(s, frames) -> dict:
 
 
 def _pyro(s, p):
-    """Pyro source + SOP solver + dopnet. Verified node names on 22.0.368."""
+    """Pyro source + self-contained SOP solver. Verified node names on 22.0.368."""
     mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     src_type = _resolve_sop_type(s, geo, "pyro_source")
     solver_type = _resolve_sop_type(s, geo, "pyro_solver")
     sphere, volume, source = s.chain(geo, ["sphere", "volume", src_type],
                                      ["pyro_src", "pyro_vol", "pyro_source"])
-    set_report = {}
-    for node, parm, value in ((sphere, "rad", 0.5), (volume, "voxelsize", 0.1)):
-        set_report[f"{node.name()}.{parm}"] = _set(node, parm, value)
+    applied = {"pyro_src.rad": _set_radius(sphere, 0.5),
+               "pyro_vol.voxelsize": _set_and_read(volume, ["voxelsize", "size"], 0.1)}
     source.parm("snippet").set(
         "// Give the source something to burn: density and temperature.\n"
         "f@density = clamp(1.0 - length(@P) * 0.2, 0.0, 1.0);\n"
@@ -124,21 +195,19 @@ def _pyro(s, p):
 
     solver = s.create(solver_type, "pyro_solver", geo)
     solver.setInput(0, source)
-    dop = _dopnet(s, p["container"])
-    link = _link_solver(solver, dop)
-    bounds = s.geometry_stats(source.path())
     return ok({
         "source_chain": [n.path() for n in (sphere, volume, source)],
         "solver": solver.path(), "solver_type": solver_type,
-        "dopnet": dop, "dop_link": link,
-        # Everything this action made (the dopnet lives at /obj, outside the
-        # container) - destroy these to leave someone else's scene as it was.
+        # what the solver itself says its inputs and cache knobs are
+        "solver_wiring": _solver_wiring(solver),
+        # Everything this action made. No dopnet: verified absent parm means a
+        # dopnet here would be decoration, not part of the simulation.
         "created_nodes": s.created[mark:],
         "frames": _set_frames(s, p["frames"]),
-        "parm_report": set_report,
-        "source_bounds": bounds.get("framed_bounds"),
+        "parm_report": applied,
+        "source_bounds": s.geometry_stats(source.path()).get("framed_bounds"),
         "not_done": ["simulation not advanced", "no cache written",
-                     "dop graph contents not authored"],
+                     "collision input not wired"],
     })
 
 
@@ -185,7 +254,8 @@ def _rbd_fall(s, p):
         _set_display(s, pack)
     except SkillFailure:
         pack = None
-    dop = _dopnet(s, p["container"])
+    # The RBD Bullet Solver SOP is NOT created here: cooking it starts a sim, which
+    # is a decision for the caller, not a side effect of building a fracture chain.
     solver_type = _resolve_sop_type(s, geo, "rbd_solver")
     return ok({
         "fracture_chain": [n.path() for n in (box, sites, frac, xform)]
@@ -196,7 +266,11 @@ def _rbd_fall(s, p):
         # created_nodes, so cleanup cannot miss it
         "site_points_wired": wired_sites,
         "pack": pack.path() if pack else None,
-        "dopnet": dop, "solver_type_available": solver_type,
+        "solver_type_available": solver_type,
+        "solver_inputs_if_created": SOLVER_INPUT_LABELS.get("rbdbulletsolver", []),
+        "solver_note": "the rbdbulletsolver SOP node was not created: cooking it runs "
+                       "a sim. Its inputs on 22.0.368 are Geometry, Constraint "
+                       "Geometry, Proxy Geometry, Collision Geometry, Guide Sim.",
         "frames": _set_frames(s, p["frames"]),
         "cook": cook,
         # Piece count and prim count are different quantities; counting one and
@@ -224,40 +298,50 @@ def _rbd_fall(s, p):
 
 
 def _flip(s, p):
+    """FLIP source chain + the self-contained FLIP Solver SOP. Nothing is simulated.
+
+    A live 22.0.368 run caught the earlier version of this builder creating a dopnet
+    whose only child was `file_output` and then reporting `dop_link: unresolved`.
+    That dopnet was never wired to anything: `flipsolver` has no dop-path parm at all
+    (doppath/simroot/dopnet/outputdop absent from the instance), so it is gone.
+    """
     mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     src_type = _resolve_sop_type(s, geo, "flip_source")
     sphere, scatter = s.chain(geo, ["sphere", "scatter"], ["flip_src", "flip_points"])
-    # same verified 22.0.368 name as rbd_fall: `npts`, not `number`
-    _set_any(scatter, ["npts", "number", "numpts"], 2000)
+    applied = {
+        # `rad` is a ParmTuple here: node.parm("rad") is None, so the old direct set
+        # silently did nothing and the sphere stayed at radius 1.0.
+        "flip_src.rad": _set_radius(sphere, 0.5),
+        # same verified 22.0.368 name as rbd_fall: `npts`, not `number`
+        "flip_points.npts": _set_and_read(scatter, ["npts", "number", "numpts"],
+                                          p["site_count"]),
+    }
     source = s.create(src_type, "flip_source", geo)
     source.setInput(0, scatter)
     _set_display(s, source)
     solver_type = _resolve_sop_type(s, geo, "flip_solver")
     solver = s.create(solver_type, "flip_solver", geo)
+    # input 0 is the FLIP Solver's "Sources" plug (read from inputLabels())
     solver.setInput(0, source)
-    dop = _dopnet(s, p["container"])
-    link = _link_solver(solver, dop)
+    stats = s.geometry_stats(source.path())
     return ok({"source_chain": [sphere.path(), scatter.path(), source.path()],
                "created_nodes": s.created[mark:],
                "solver": solver.path(), "solver_type": solver_type,
-               "dopnet": dop, "dop_link": link,
+               "parm_report": applied,
+               "site_points": _point_count(scatter),
+               "source_stats": {"points": stats.get("point_count"),
+                                "prims": stats.get("prim_count"),
+                                "prim_types": stats.get("prim_types")},
+               "source_stats_note": "1 prim / 1 point here is correct: the FLIP Source "
+                                    "SOP emits a single VDB volume prim (verified prim "
+                                    "type 'VDB'). Seed particle counts live at the "
+                                    "Scatter SOP; the solver resamples the volume.",
+               "solver_wiring": _solver_wiring(solver),
                "frames": _set_frames(s, p["frames"]),
-               "not_done": ["simulation not advanced"]})
-
-
-def _link_solver(solver, dop_path: str) -> dict:
-    """Try to point a SOP solver at the dopnet; report honestly what bound."""
-    for name in ("doppath", "simroot", "dopnet", "outputdop"):
-        parm = solver.parm(name)
-        if parm is not None:
-            try:
-                parm.set(dop_path)
-                return {"parm": name, "value": dop_path}
-            except Exception:
-                continue
-    return {"unresolved": "no dop-path parm found on the solver; "
-                          "dopnet created but not linked"}
+               "not_done": ["simulation not advanced", "no cache written",
+                            "Container/Collisions inputs left empty",
+                            "FLIP particles are sampled inside the solver, not here"]})
 
 
 def _cache_sop(s, p):

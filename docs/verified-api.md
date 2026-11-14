@@ -72,7 +72,7 @@ The accessors most 19.5-era scripts use are **gone**:
 | Object | Exists | Does not exist |
 | --- | --- | --- |
 | `hou.Parm` | `rawValue()` (string/menu identifier), `eval()` (number/menu index), `set()` | `val()`, `vals()`, `getValue()` |
-| `hou.ParmTuple` | `eval()` → e.g. `(1.0, 1.0, 1.0)`, `set((x,y,z))`, `name()` | `rawValue()`, `vals()`, `val()`, `parms()` |
+| `hou.ParmTuple` | `eval()` → e.g. `(1.0, 1.0, 1.0)`, `set((x,y,z))`, `name()`, `len(t)` → child count | `rawValue()`, `vals()`, `val()`, `parms()` |
 | `hou.BoundingBox` | `minvec()`, `maxvec()` (lowercase v) | `minVec()`, `maxVec()` |
 | `hou.PaneTabType` value | `name()` → `'NetworkEditor'` | `internalName()`, `internalType()`, `enumerationName()` |
 | `hou` module | — | `hou.setCurrentNode()` |
@@ -262,6 +262,10 @@ having unsaved changes.
 | primitives | `geo.prims()`, `hou.PolySphere`, `hou.PackedPrim` exist. |
 | attribs on a prim | `prim.findAttrib(name)` -> `hou.PrimAttribute` or `None`, then `prim.attribValue(name)`. **`hou.Prim.findAttribValue()` does not exist** (that is the `hou.Geometry` API). |
 | wrangle context | a detail wrangle on a raw grid sees **1 prim, 0 points** in `s@numprims`/`n@numpoints` style reads for packed contexts - do not write stats tests that assume both. |
+| attribute lists | `geo.pointAttribs()`, `geo.primAttribs()` (singular **prim**), `geo.vertexAttribs()`, `geo.globalAttribs()`. **`geo.attribs()` and `geo.primsAttribs()` do not exist** - inside a `try/except` they silently return nothing and the report looks like empty geometry. |
+| prim **types** matter | `geometry_stats` reports `prim_types` (a `{type_name: count}` map). A FLIP Source SOP holds **1 prim, 1 point** and the prim type is `VDB` — that is a correct source volume, not a broken chain. Verified `flipsource` facts: one input labelled "Geometry to Source From", output = 1 VDB prim + 1 point at the origin. |
+| menu accessor | `hou.Parm.menuItems()` **raises `hou.OperationFailed: Cannot get menu items for a non-menu parm`** on a plain parm - it does not return an empty list. Ask the parm template group instead, or wrap the call. |
+| `node.geometry()` can be None | an uncooked SOP solver returns no geometry object at all: a fresh `flipsolver` in a source chain gave `geometry() is None` while everything upstream cooked. Treat None as a state ("not stepped yet"), never as "empty geo". |
 
 ## Node types that exist (and do not)
 
@@ -340,13 +344,34 @@ and strip `::` for display.
 
 ## Simulation reality check
 
-A freshly built RBD setup (`rbdpack` -> `rbdbulletsolver` -> `dopnet`) cooks with
-**zero node errors** on 22.0.368, but with pieces resting on the ground plane and
-no initial motion, nothing moves: **the graph is correct and static is the
-physically right answer.** To get motion, give the pieces energy - a lean, a
-drop, or an impactor. The `simulation-tools` skill does that with `xyzdist` +
-`prbbox`, and its result says `simulated: false` because it does not step the
-solver.
+A freshly built RBD setup (`box` -> scatter sites -> `voronoifracture` ->
+`xform` lean/lift -> `rbdpack`) cooks with **zero node errors** on 22.0.368, but
+with pieces resting upright on the ground plane and no initial motion, nothing
+moves: **the graph is correct and static is the physically right answer.** To get
+motion, give the pieces energy - a lean (`xform.rx`), a drop (`xform.ty`), or an
+impactor. The `simulation-tools` skill does that and reports `not_done` including
+"simulation not advanced", because it does not step the solver.
+
+### SOP-level solvers own their simulation (22.0.368)
+
+Instances of the three SOP solvers expose **no dop-related parm whatsoever**
+(probed `doppath`, `simroot`, `dopnet`, `outputdop` - all absent). They simulate
+themselves and cache through `cacheenabled`, `cachemaxsize`, `checkpoint_*`,
+`explicitcache*`. A dopnet beside one is an empty object whose only child is
+`file_output`, and any "link" reported to it is fiction - a live run of the FLIP
+builder proved exactly that, which is why the builders stopped making dopnets.
+
+Wire the solver's own inputs instead. `node.inputLabels()` on 22.0.368:
+
+| solver | inputs, in index order |
+|---|---|
+| `pyrosolver` | Sources, Collision Geometry/Volumes |
+| `flipsolver` | Sources, Container, Collisions, Boundary Flow |
+| `rbdbulletsolver` | Geometry, Constraint Geometry, Proxy Geometry, Collision Geometry, Guide Sim |
+
+`simulation-tools` returns these as `solver_wiring`, together with `dop_parms: []`
+so a caller can see the absence rather than take the doc's word for it. It wires
+input 0 only and lists the rest in `not_done`.
 
 ## USD reality check
 

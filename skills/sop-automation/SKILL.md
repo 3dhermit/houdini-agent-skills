@@ -23,7 +23,7 @@ structured JSON out. You never touch `hou` directly from the agent side.
 | `set_parms` | `path, parms{}` | `set`/`kept`/`drift`, read back from hou (unknown parm name -> error with suggestions) |
 | `read_parms` | `path, names[]` | raw parm values |
 | `find` | `pattern, limit` | matching node refs |
-| `geo_stats` | `path` | prims, points, packed count, pieces by `@name`, bounds |
+| `geo_stats` | `path` | prims, **prim types**, points, packed count, pieces by `@name`, bounds |
 | `delete_node` | `path, confirm=path` | deletion receipt (confirm is mandatory) |
 | `list_types` | `parent, contains` | valid node type names for that network |
 
@@ -39,6 +39,10 @@ hython -m houdini_skills.cli sop-automation grid_bevel \
   `sizex`/`sizez`/`divsx` is the **Box** SOP. A knob the skill could not bind is
   reported under `unresolved_parms`, which means the value was never set.
   Unknown names raise `unknown_parm` with real suggestions - read them and retry.
+- **Count prims and count their kinds.** `geo_stats.prim_types` is a
+  `{type_name: count}` map. A FLIP Source SOP with 2000 seeds upstream reports
+  `prim_count: 1` because that prim is a **VDB volume** — the chain is fine, the
+  count was the wrong question.
 - **Piece count is not prim count.** Use `geo_stats` (`piece_count_by_name`),
   because packed/fractured geometry reports one per piece, not one per primitive.
 - **Set the display flag** on the chain output (`grid_bevel` does this) or an

@@ -189,8 +189,13 @@ def collect(instances: bool = False) -> dict:
         # labels, so that is all this mode reports.
         if tpl is None:
             continue
-        out["facts"]["menu_labels[%s].%s.%s" % (cat, node_type, parm)] = [
-            str(x) for x in (tpl.menuItems() or ())]
+        # menuItems() only exists on a menu template; on any other template it
+        # raises (and on a live non-menu hou.Parm it raises hou.OperationFailed).
+        try:
+            out["facts"]["menu_labels[%s].%s.%s" % (cat, node_type, parm)] = [
+                str(x) for x in (tpl.menuItems() or ())]
+        except Exception:
+            out["facts"]["menu_labels[%s].%s.%s" % (cat, node_type, parm)] = None
 
     if instances:
         made = []

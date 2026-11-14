@@ -400,10 +400,13 @@ KNOWLEDGE_BASE = [
     {
         "id": "builder-leftover-dopnet",
         "match": r"leftover|_dopnet|asm_live.*still present",
-        "cause": "Simulation builders make nodes in more than one place: the container you "
-                 "named at /obj plus a separate dopnet object (/obj/<container>_dopnet). "
-                 "A caller that destroys only the container leaks the dopnet, and each run "
-                 "leaks another one (_dopnet1, _dopnet2).",
+        "cause": "Builders make nodes in more than one place: the container you named at "
+                 "/obj, plus an /out ROP or a LOP under /stage. A caller that destroys only "
+                 "the container leaks the rest, and each run leaks another copy "
+                 "(_dopnet1, _dopnet2 - the suffixes Houdini appends when a name is taken). "
+                 "This repo also used to create a dopnet per sim build; that is gone, "
+                 "because the SOP-level solvers have no dop parm to point at it (see "
+                 "sop-solvers-are-self-contained).",
         "fix": "Destroy the payload's `created_nodes` list, deepest paths first - every "
                "builder and exporter now reports it, including the /out ROP and the LOP in "
                "/stage. Prove the scene is clean by node count: "
@@ -499,6 +502,107 @@ KNOWLEDGE_BASE = [
                     "grid.sizex 6.5 -> 6.5, -3 -> -3.0; karma.samplesperpixel 0 -> 1; "
                     "karma.trange menuItems ('off','normal','on','stage') with 99 -> eval "
                     "3 raw 'stage', -3 -> eval 0 raw 'off', 2 -> eval 2 raw 'on'",
+    },
+    {
+        "id": "sop-solvers-are-self-contained",
+        "cause": "A dopnet sitting next to a SOP-level Pyro/FLIP/RBD solver does nothing. "
+                 "On 22.0.368 the instances of pyrosolver, flipsolver and rbdbulletsolver "
+                 "expose NO dop-related parm: doppath, simroot, dopnet and outputdop are "
+                 "all absent from the instance parm list. Those solvers run the simulation "
+                 "themselves and cache through cacheenabled / cachemaxsize / checkpoint_* "
+                 "/ explicitcache*. Builders that 'link the solver to the dopnet' report a "
+                 "link that can never resolve, and leave an empty object whose only child "
+                 "is a file_output node.",
+        "match": r"dop_link|dopnet.*unresolved|no dop-path parm|unresolved.*dopnet",
+        "fix": "Do not create a dopnet for a SOP-level solver. Wire the solver's own "
+               "inputs instead - read them with node.inputLabels(): pyrosolver "
+               "(Sources, Collision Geometry/Volumes), flipsolver (Sources, Container, "
+               "Collisions, Boundary Flow), rbdbulletsolver (Geometry, Constraint "
+               "Geometry, Proxy Geometry, Collision Geometry, Guide Sim). Advance the sim "
+               "by stepping frames/cache, never by assuming a dop graph exists.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "live pass on 22.0.368: flip build reported dopnet children "
+                    "['file_output'] and dop_link unresolved; instance probes of all three "
+                    "solvers returned dopish == [] and inputLabels() as listed above; "
+                    "cache_parms present on each (cacheenabled, cachemaxsize, "
+                    "checkpoint_*, explicitcache*); pinned by tests/test_tier_b.py::"
+                    "TestHoudini22ApiSpellings.test_sop_level_solvers_have_no_dop_parm_and_named_inputs",
+    },
+    {
+        "id": "primitive-sop-sizes-are-parmtuples",
+        "cause": "node.parm('rad') on a Sphere SOP is None, so a code path that checks "
+                 "for None and skips (or a _set() that returns False) silently leaves the "
+                 "default radius 1.0 while the log says the size was set. The same shape "
+                 "applies to box/grid size parms: they are ParmTuples ('rad' -> radx/rady/"
+                 "radz, 'size' -> sizex/sizey/sizez), and hou.Node.parm() only returns "
+                 "single parms, never tuple names.",
+        "match": r"has no attribute 'set'|NoneType.*no attribute 'set'|parm\(.rad.\)|radius.*not.*set|size.*ignored",
+        "fix": "Use node.parmTuple('rad') and set the whole tuple, then read it back: "
+               "t.eval() -> the values hou kept. simulation-tools._set_radius does exactly "
+               "this and returns {parm, requested, kept}. len(t) gives the child count "
+               "(ParmTuple has no parms() accessor).",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe: sphere.parm('rad') is None while "
+                    "sphere.parmTuple('rad').eval() == (1.0, 1.0, 1.0) with children "
+                    "radx/rady/radz; ParmTuple.parms() raises AttributeError but len(t) == "
+                    "3 works; pinned by tests/test_tier_b.py::"
+                    "TestHoudini22ApiSpellings.test_set_radius_uses_the_parm_tuple_and_reads_back",
+    },
+    {
+        "id": "geometry-attribute-accessor-spellings",
+        "cause": "hou.Geometry has no attribs() and no primsAttribs(). The accessors are "
+                 "pointAttribs(), primAttribs() (singular 'prim'), vertexAttribs() and "
+                 "globalAttribs(). A guessed name inside a try/except hides the whole "
+                 "attribute list, so piece/attribute reports come back empty and look like "
+                 "empty geometry. Separately, node.geometry() can legitimately be None - "
+                 "an uncooked SOP solver (e.g. a FLIP Solver with nothing stepped) exposes "
+                 "no geometry object at all.",
+        "match": r"has no attribute 'attribs'|has no attribute 'primsAttribs'|NoneType.*no attribute 'prims'|geometry\(\) is None",
+        "fix": "Call pointAttribs()/primAttribs()/vertexAttribs()/globalAttribs(). Treat a "
+               "None geometry as a state, not a crash: this repo's diagnostics report "
+               "'no geometry (node failed to cook)' and geometry_stats raises a structured "
+               "no_geometry failure instead of an AttributeError.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe 22.0.368: Geometry.attribs() and Geometry.primsAttribs() "
+                    "raised AttributeError; pointAttribs/primAttribs/vertexAttribs/"
+                    "globalAttribs exist; the FLIP Solver SOP in a fresh chain returned "
+                    "geometry() is None while everything upstream cooked normally",
+    },
+    {
+        "id": "flip-source-emits-one-vdb-prim",
+        "cause": "A FLIP Source SOP whose upstream scatter holds 2000 seed points still "
+                 "reports prim_count 1 / point_count 1 at its own output. That is not "
+                 "lost geometry: the node converts the seeds into a single VDB volume "
+                 "prim (verified prim type 'VDB', one point at the origin). Agents that "
+                 "count prims conclude the chain is broken and start rewiring a correct "
+                 "graph.",
+        "match": r"flip.*1 point|source chain.*empty|only one prim|flipsource",
+        "fix": "Read prim **types**, not just counts: geometry_stats returns prim_types, "
+               "so {'VDB': 1} reads as one source volume. Judge the seed count at the "
+               "Scatter SOP (site_points) and expect particle counts to appear only "
+               "after the solver is stepped.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "live pass 22.0.368: /obj/asm_l6_flip/flip_source gave prim_count 1, "
+                    "point_count 1, framed_bounds min == max == [0,0,0] while its "
+                    "upstream flip_points held exactly 30 points; a hython probe of "
+                    "flipsource reported prim types ['VDB'] and inputLabels() "
+                    "['Geometry to Source From']",
+    },
+    {
+        "id": "menuitems-raises-on-non-menu-parm",
+        "cause": "hou.Parm.menuItems() on a non-menu parm raises "
+                 "hou.OperationFailed('Cannot get menu items for a non-menu parm') "
+                 "instead of returning an empty list, so a loop that inspects every "
+                 "parm of a node dies on the first float slider.",
+        "match": r"Cannot get menu items for a non-menu parm|OperationFailed.*menu",
+        "fix": "Wrap menuItems() per parm, or ask the template group "
+               "(node.parmTemplateGroup().find(name)) and check the template type "
+               "before calling menuItems().",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe 22.0.368 looping flipsource.parms(): "
+                    "hou.Parm_menuItems raised hou.OperationFailed with that message "
+                    "(traceback through hou.py line 82367); with the call wrapped, the "
+                    "same loop enumerated the node's real menus",
     },
 ]
 

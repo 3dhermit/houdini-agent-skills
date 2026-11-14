@@ -64,6 +64,6 @@ regression, not a fix.
 
 ## What v1 deliberately does not do
 
-Render (configuring a ROP is not rendering), author DOP graph internals, step
+Render (configuring a ROP is not rendering), change solver settings or step
 simulations, author Karma AOVs, handle multi-file USD layer stacks or MaterialX,
 or touch crowds. Those are v2 conversations, and each needs its own proof plan.
