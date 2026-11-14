@@ -53,12 +53,15 @@ def _create_node(s, p):
 
 
 def _chain(s, p):
+    mark = len(s.created)
     made = s.chain(p["parent"], p["types"], p.get("names"))
     return ok({"nodes": [s.ref(n) for n in made],
+               "created_nodes": s.created[mark:],
                "wired": [f"{a.name()} -> {b.name()}" for a, b in zip(made, made[1:])]})
 
 
 def _grid_bevel(s, p):
+    mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     grid, bevel = s.chain(geo, ["grid", "polybevel"], ["grid1", "bevel1"])
     applied, unresolved = {}, {}
@@ -84,6 +87,7 @@ def _grid_bevel(s, p):
     cook = s.cook(bevel.path())
     stats = s.geometry_stats(bevel.path())
     return ok({"grid": grid.path(), "bevel": bevel.path(), "applied_parms": applied,
+               "created_nodes": s.created[mark:],
                "unresolved_parms": unresolved, "cook": cook, "result": stats})
 
 

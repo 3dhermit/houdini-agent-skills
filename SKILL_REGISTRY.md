@@ -144,7 +144,7 @@ Export Houdini SOP geometry to USD and report what landed on disk; Solaris sopim
 - "usd asset from houdini"
 
 **Actions** (payload schema lives in `skills/usd-pipeline/meta.json`)
-- `export` - required: path; optional: container, frames, output, unpack
+- `export` - required: path; optional: container, default_prim, flatten_sop_layers, frames, keep_layers_together, output, unpack
 - `sopimport` - required: path; optional: prim_path, stage
 - `verify` - required: output; optional: none
 

@@ -66,6 +66,20 @@
         "unpack": {
           "type": "boolean",
           "default": false
+        },
+        "flatten_sop_layers": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in bind of the usd ROP's 'flattensoplayers'. Verified on 22.0.368: for a SOP Import LOP it changed nothing observable - the requested file still referenced a separate SOP layer and the geometry composed through it either way. Use keep_layers_together to control where the companion layer lands."
+        },
+        "default_prim": {
+          "type": "string",
+          "description": "Optional USD default prim path, bound to the ROP's 'defaultprim' parm."
+        },
+        "keep_layers_together": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pin the SOP Import LOP's own layer (parm 'savepath', default '$HIP/usd/$OS.usd') next to the requested output, so the export travels as one folder. Verified on 22.0.368: with this on the subLayer entry resolves to './<container>_sop.usd'."
         }
       },
       "required": [

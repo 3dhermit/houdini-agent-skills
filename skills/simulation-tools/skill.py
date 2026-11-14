@@ -106,6 +106,7 @@ def _set_frames(s, frames) -> dict:
 
 def _pyro(s, p):
     """Pyro source + SOP solver + dopnet. Verified node names on 22.0.368."""
+    mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     src_type = _resolve_sop_type(s, geo, "pyro_source")
     solver_type = _resolve_sop_type(s, geo, "pyro_solver")
@@ -130,6 +131,9 @@ def _pyro(s, p):
         "source_chain": [n.path() for n in (sphere, volume, source)],
         "solver": solver.path(), "solver_type": solver_type,
         "dopnet": dop, "dop_link": link,
+        # Everything this action made (the dopnet lives at /obj, outside the
+        # container) - destroy these to leave someone else's scene as it was.
+        "created_nodes": s.created[mark:],
         "frames": _set_frames(s, p["frames"]),
         "parm_report": set_report,
         "source_bounds": bounds.get("framed_bounds"),
@@ -140,11 +144,15 @@ def _pyro(s, p):
 
 def _rbd_fall(s, p):
     """Voronoi-fractured column with deliberate potential energy, then RBDPack."""
+    mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     frac_type = _resolve_sop_type(s, geo, "rbd_fracture")
     box, sites = s.chain(geo, ["box", "scatter"], ["rbd_column", "rbd_sites"])
     _set(box, "sizex", 1.0); _set(box, "sizey", 3.0); _set(box, "sizez", 1.0)
-    _set(sites, "number", p["voronoi_points"])
+    # 22.0.368: scatter drives point count through `npts`; `number` does not exist,
+    # so the old single-name call silently left the default density in place.
+    sites_parm, sites_ok = _set_any(sites, ["npts", "number", "numpts"], p["voronoi_points"])
+    site_points = _point_count(sites)
 
     frac = s.create(frac_type, "rbd_shatter", geo)
     frac.setInput(0, box)
@@ -159,11 +167,15 @@ def _rbd_fall(s, p):
             pass
     xform = s.create("xform", "rbd_lean", geo)
     xform.setInput(0, frac)
-    _set(xform, "rotatex", p["lean_degrees"])
-    _set(xform, "ty", p["drop_distance"])
+    # 22.0.368 xform exposes the `t`/`r`/`s` tuples with children tx..rz; the 19.5-era
+    # `rotatex` name is gone, so the lean used to be a silent no-op and the column
+    # stood upright with nothing to fall through - which reads like a physics result.
+    lean_parm, lean_ok = _set_any(xform, ["rx", "rotatex"], p["lean_degrees"])
+    drop_parm, drop_ok = _set_any(xform, ["ty", "translatey"], p["drop_distance"])
     _set_display(s, xform)
     cook = s.cook(xform.path())
     stats = s.geometry_stats(xform.path())
+    bounds = stats.get("framed_bounds")
 
     pack_type = _resolve_sop_type(s, geo, "rbd_pack") if "rbd_pack" in SOP_TYPES else ""
     pack = None
@@ -179,13 +191,31 @@ def _rbd_fall(s, p):
         "fracture_chain": [n.path() for n in (box, sites, frac, xform)]
                           + ([pack.path()] if pack else []),
         "fracture_node": frac.path(), "fracture_type": frac_type,
+        "created_nodes": s.created[mark:],
+        # the dopnet is an /obj container outside the one you named - it is in
+        # created_nodes, so cleanup cannot miss it
         "site_points_wired": wired_sites,
         "pack": pack.path() if pack else None,
         "dopnet": dop, "solver_type_available": solver_type,
         "frames": _set_frames(s, p["frames"]),
         "cook": cook,
-        "source_pieces": stats.get("piece_count_by_name") or stats["prim_count"],
-        "energy": {"lean_degrees": p["lean_degrees"], "lift": p["drop_distance"]},
+        # Piece count and prim count are different quantities; counting one and
+        # labelling it the other is how an agent ends up believing a column broke
+        # into 11,067 pieces. None means the output carries no @name attribute.
+        "source_prims": stats["prim_count"],
+        "source_pieces_by_name": stats.get("piece_count_by_name"),
+        "piece_note": "pieces = distinct @name values on prims; None means no name "
+                      "attribute at this node, so piece count is unknown (a prim count "
+                      "is not a piece count)",
+        "site_points": site_points,
+        "site_count_requested": p["voronoi_points"],
+        "knobs": {"site_count_parm": sites_parm, "lean_parm": lean_parm,
+                  "drop_parm": drop_parm,
+                  "unbound": [k for k, ok in (("site_count", sites_ok), ("lean", lean_ok),
+                                              ("drop", drop_ok)) if not ok]},
+        "bounds_after_energy": bounds,
+        "energy": {"lean_degrees": p["lean_degrees"], "lift": p["drop_distance"],
+                   "lean_applied": lean_ok, "drop_applied": drop_ok},
         "why_energy": "fractured pieces that start upright and supported will "
                       "correctly never move; the lean + drop is the potential energy",
         "not_done": ["simulation not advanced", "no cache written",
@@ -194,10 +224,12 @@ def _rbd_fall(s, p):
 
 
 def _flip(s, p):
+    mark = len(s.created)
     geo = s.ensure_geo(p["container"])
     src_type = _resolve_sop_type(s, geo, "flip_source")
     sphere, scatter = s.chain(geo, ["sphere", "scatter"], ["flip_src", "flip_points"])
-    _set(scatter, "number", 2000)
+    # same verified 22.0.368 name as rbd_fall: `npts`, not `number`
+    _set_any(scatter, ["npts", "number", "numpts"], 2000)
     source = s.create(src_type, "flip_source", geo)
     source.setInput(0, scatter)
     _set_display(s, source)
@@ -207,6 +239,7 @@ def _flip(s, p):
     dop = _dopnet(s, p["container"])
     link = _link_solver(solver, dop)
     return ok({"source_chain": [sphere.path(), scatter.path(), source.path()],
+               "created_nodes": s.created[mark:],
                "solver": solver.path(), "solver_type": solver_type,
                "dopnet": dop, "dop_link": link,
                "frames": _set_frames(s, p["frames"]),
@@ -265,9 +298,36 @@ def _set_frame_range(s, p):
 
 
 def _probe_types(s, p):
-    names = _obj_types(s)
-    hit = sorted(n for n in names if (p["contains"] or "").lower() in n.lower())
-    return ok({"version": str(s.version), "count": len(hit), "types": hit[:60]})
+    """Search node types across every category, not just /obj containers.
+
+    Verified on 22.0.368 with hou.nodeTypeCategories(): the categories are Chop,
+    ChopNet, Cop, Cop2, CopNet, Data, Director, Dop, Driver, Lop, Manager, Object,
+    Shop, Sop, Top, TopNet, Vop, VopNet. Searching only Object types reported
+    'no pyro anywhere' when pyro exists as Dop (pyrosolver...), Sop (pyrosource...),
+    Cop, Shop and Vop types. Names also collide across categories (karma is both a
+    ROP and a LOP type), so every hit carries its category.
+    """
+    needle = (p.get("contains") or "").lower()
+    cats = s.hou.nodeTypeCategories()
+    by_cat, hits, total = {}, [], 0
+    for cat_name in sorted(cats):
+        try:
+            names = sorted(cats[cat_name].nodeTypes())
+        except Exception:
+            continue
+        matched = [n for n in names if needle in n.lower()]
+        if not matched:
+            continue
+        total += len(matched)
+        by_cat[cat_name] = {"count": len(matched), "sample": matched[:12]}
+        hits.extend({"category": cat_name, "type": n} for n in matched[:12])
+    return ok({"version": str(s.version), "needle": needle or None,
+               "categories_searched": sorted(cats),
+               "count": total, "by_category": by_cat, "types": hits[:60],
+               "note": "a bare node-type name is ambiguous: on 22.0.368 SOP and LOP "
+                       "share 33 names and 'karma' exists in both ROP and LOP. Create "
+                       "the node inside the network whose category owns it."})
+
 
 
 def _has(node, parm: str) -> bool:
@@ -280,6 +340,27 @@ def _set(node, parm: str, value) -> bool:
         return False
     p.set(value)
     return True
+
+
+def _set_any(node, candidates: list, value):
+    """Set the first parm name that actually exists on this build; (bound, ok).
+
+    A single hardcoded name is how silent breakage happens: on 22.0.368 `scatter`
+    has `npts` and no `number`, and `xform` has `rx` (the `r` tuple) and no
+    `rotatex`. `_set()` returns False in those cases, which callers used to drop.
+    """
+    for name in candidates:
+        if node.parm(name) is not None:
+            node.parm(name).set(value)
+            return name, True
+    return None, False
+
+
+def _point_count(node):
+    try:
+        return len(node.geometry().points())
+    except Exception:
+        return None
 
 
 def _set_display(s, node) -> None:

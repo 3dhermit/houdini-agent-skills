@@ -70,11 +70,18 @@ def _list_engines(s, p):
     found = {eng: [t for t in ENGINE_TYPES[eng] if t in names]
              for eng in ENGINE_TYPES}
     return ok({"version": str(s.version), "engines": {k: bool(v) for k, v in found.items()},
+               # `engines: karma_xpu=True` on its own is misleading: it is true because
+               # the candidate list falls back to the plain `karma` ROP. Say which type
+               # was actually matched, and whether the engine's own name is registered.
+               "resolved_types": {k: (v[0] if v else None) for k, v in found.items()},
+               "exact_type_registered": {eng: (eng in names) for eng in ENGINE_TYPES},
                "render_node_types_matching": sorted(n for n in names
                                                     if "karma" in n or "mantra" in n or "rop" in n)[:40],
                "note": "an empty engine list means that node type is not registered on "
                        "this build - on 22.0.368 'mantra' is gone and 'karma_xpu' was "
-                       "never a node type (both verified via ropNodeTypeCategory)"})
+                       "never a node type (both verified via ropNodeTypeCategory). "
+                       "karma_xpu therefore resolves to the plain 'karma' ROP, and no "
+                       "ROP parm selects CPU vs XPU here: check xpu_note from configure."})
 
 
 def _configure(s, p):
@@ -96,7 +103,8 @@ def _configure(s, p):
                 sorted(n for n in available if "rop" in n or "karma" in n or "mantra" in n)[:20]),
             details={"tried": ENGINE_TYPES[engine]})
 
-    rop = out_net.createNode(chosen, p["container"])
+    mark = len(s.created)
+    rop = s.create_at(out_net.path(), chosen, p["container"])
     applied, unresolved = {}, {}
     knobs = {}
     if p.get("resolution"):
@@ -142,6 +150,7 @@ def _configure(s, p):
         pass
 
     return ok({"rop": rop.path(), "node_type": chosen, "engine": engine,
+               "created_nodes": s.created[mark:],
                "applied": applied, "unresolved": unresolved,
                "xpu_note": xpu_note,
                "requested_aovs": p.get("aovs") or [], "aov_note": aov_note,

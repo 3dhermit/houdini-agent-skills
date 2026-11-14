@@ -54,6 +54,23 @@ The Karma AOV list is a parm-group UI, not one parm. Guessing it produces
 renders that silently miss passes, so `configure` records the request and tells
 you it skipped it. Ask for explicit AOV setup and do it node-by-node.
 
+## What `list_engines` is allowed to claim
+`engines.karma_xpu` can be **true while no `karma_xpu` type exists**, because the
+candidate list fell back to plain `karma`. That is why the result also carries:
+
+- `resolved_types` — which node type each engine name actually resolved to
+  (`karma_xpu -> karma` on 22.0.368);
+- `exact_type_registered` — whether that exact name is a registered ROP type
+  (`false` for both `karma_cpu` and `karma_xpu` here);
+- `render_node_types_matching` + `note` — what the build really has.
+
+Never report "XPU available" from the boolean alone.
+
+## Undo what an action made
+`configure` returns `created_nodes` (the `/out` ROP). Destroy it, deepest path
+first, to leave a shared scene as it was; prove it with
+`len(hou.node("/").allSubChildren())` before == after.
+
 ## Non-claims
 `rendered: false` is always in the result. Nothing was drawn, no licence was
 consumed, no file was written.

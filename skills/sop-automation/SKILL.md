@@ -45,6 +45,11 @@ hython -m houdini_skills.cli sop-automation grid_bevel \
   Object Merge downstream pulls the wrong geometry.
 - Deleting needs `confirm` equal to the path. There is no bulk delete in v1.
 
+## Undo what an action made
+`chain` and `grid_bevel` return `created_nodes` — every path they made, container
+included. Destroy that list, deepest path first, and prove the scene is clean with
+`len(hou.node("/").allSubChildren())` before == after.
+
 ## Failure modes
 | error kind | what it means | do this |
 |---|---|---|

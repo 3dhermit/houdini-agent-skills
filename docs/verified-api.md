@@ -32,6 +32,143 @@ A handle can also go dead mid-walk: after `destroy()` on a parent, the child
 objects `allSubChildren()` returned raise `hou.ObjectWasDeleted` on `.path()`.
 Read the path before destroying and skip handles that are already dead.
 
+## Type-level introspection is not instance truth (22.0.368)
+
+`hou.OpNodeType` — what `category.nodeTypes()` returns — offers `parmTemplates()` (a
+tuple of templates) and `parmTemplateGroup()`. There is **no `parmTemplateSet()`** on
+it; the `AttributeError` helpfully suggests `parmTemplates`.
+
+Both type-level reads **under-report parms**, because the framework adds some parms
+only at instance time:
+
+| Node | Absent from the type templates | Present on a real node |
+| --- | --- | --- |
+| `grid` | `sizex`, `sizey` | both |
+| `box` | `sizex`, `sizey`, `sizez`, `divsx` | all four |
+| `polybevel` | `offset` | yes |
+| `filecache` | `sopoutput`, `f1`, `f2` | all three |
+| `karma` | `f1`, `f2`, `resolutionx`, `resolutiony` | all four |
+| `usd` | `f1`, `f2` | both |
+
+So: **never validate a parm name against type templates** — it rejects parms that
+exist. Read `node.parms()` / `node.parmTuples()`. Type templates are good for labels,
+folders and menu definitions only.
+
+### Menus
+
+- `hou.Parm.menuItems()` is the **only** menu accessor on a parm: a flat tuple of
+  strings. There is no `menuItemIdentifier`, no `menuItemLabels`, no `menuItemValues`.
+- `hou.MenuParmTemplate.menuItems()` is flat too — no `items()`, and it does not hand
+  back `(label, identifier)` pairs. Anything that unpacks it into two names blows up
+  with `too many values to unpack`.
+- The settable value is what `rawValue()` reports back. Verified menus: Karma and USD
+  ROP `trange` → `off`, `normal`, `on`, `stage`; File Cache `trange` → `off`, `normal`;
+  Attribute Wrangle `class` → `detail`, `primitive`, `point`, `vertex`, `number`.
+
+### Reading and writing parm values (22.0.368)
+
+The accessors most 19.5-era scripts use are **gone**:
+
+| Object | Exists | Does not exist |
+| --- | --- | --- |
+| `hou.Parm` | `rawValue()` (string/menu identifier), `eval()` (number/menu index), `set()` | `val()`, `vals()`, `getValue()` |
+| `hou.ParmTuple` | `eval()` → e.g. `(1.0, 1.0, 1.0)`, `set((x,y,z))`, `name()` | `rawValue()`, `vals()`, `val()`, `parms()` |
+| `hou.BoundingBox` | `minvec()`, `maxvec()` (lowercase v) | `minVec()`, `maxVec()` |
+| `hou.PaneTabType` value | `name()` → `'NetworkEditor'` | `internalName()`, `internalType()`, `enumerationName()` |
+| `hou` module | — | `hou.setCurrentNode()` |
+| `hou.playbar.frameRange()` | returns a `hou.Vector2` — `rng[0]`/`rng[1]` | `.start()`, `.end()` |
+
+So `parm.val()` and `parmTuple.vals()` — the two most common calls in older Houdini
+Python — raise `AttributeError` on this build. Read tuples through `eval()`.
+
+Panes are GUI-only: `hou.ui` **does not exist in hython at all**
+(`module 'hou' has no attribute 'ui'`). In a live GUI it does: `hou.ui.paneTabs()`
+returned 12 tabs and `hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)` returned
+the pane showing `/obj/rbd/rbd_solver1`. Guard pane code with `hasattr(hou, "ui")`.
+
+All of it is locked by `tests/test_tier_b.py::TestHoudini22ApiSpellings`.
+
+### Hip-file state
+
+`hou.hipFile.hasUnsavedChanges()`. There is no `dirty()`, no `modified()`, no
+`suppressSaveOnExit`. To show a probe left someone's session alone, count nodes
+(`len(hou.node("/").allSubChildren())`) before and after — do **not** save.
+
+### Type names collide across categories
+
+| Pair | Shared type names | Examples |
+| --- | --- | --- |
+| SOP / LOP | 33 | `copytopoints`, `attribwrangle`, `cache`, `dopnet`, `null` |
+| ROP / LOP | 17 | **`karma` is in both**, `fetch`, `null` |
+| SOP / OBJ | 22 | `dopnet`, `chopnet`, `cop2net` |
+| OBJ / LOP | 16 | `dopnet`, `light`, `matnet` |
+
+`hou.lopNodeTypeCategory().nodeType("copytopoints")` is not the SOP tool. Qualify the
+category, or resolve types against the network you are creating in.
+
+Also corrected while probing: the ROP fetch driver is **`fetch`** — there is no
+`fetchnetwork` and no `driver` type. LOP component types are `componentgeometry`,
+`componentmaterial`, `componentoutput`; there is no `componentlist` and no `subgraph`
+type (subgraph editing is a mode, not a node).
+
+The category accessor is `hou.nodeTypeCategories()` — there is no
+`hou.categoryAllAsDictionary()`. The categories on 22.0.368 are: `Chop`, `ChopNet`,
+`Cop`, `Cop2`, `CopNet`, `Data`, `Director`, `Dop`, `Driver`, `Lop`, `Manager`,
+`Object`, `Shop`, `Sop`, `Top`, `TopNet`, `Vop`, `VopNet`.
+
+Why searching one category lies — `pyro` by category, read off the build:
+
+| Category | Types containing `pyro` | Examples |
+| --- | --- | --- |
+| Dop | 3 | `pyrosolver`, `pyrosolver::2.0`, `pyrosolver_sparse` |
+| Sop | 14 | `pyrosource`, `pyrobakevolume`, `pyropostprocess`, `pyrosolver` |
+| Cop | 36 | `pyro_advect`, `pyro_activate` (Copernicus pyro) |
+| Vop | 23 | `kma_pyroshader`, `kma_pyropreview` |
+| Shop | 3 | `pyro`, `pyro::2.0`, `pyro::3.0` (shader) |
+| Data | 71 | `sidefx::recipe::coppyro::fireball` (HDA recipes) |
+
+An `/obj`-only type search reported **0 pyro node types**, which is how an agent
+concludes a workflow does not exist. `simulation-tools probe_types` now walks every
+category and labels each hit.
+
+## Names that changed since 19.5 (migration traps)
+
+Verified on 22.0.368 by reading parms off live nodes. Each of these failed **silently**
+in this repo's own code, because a missing `node.parm(name)` returns `None` and a
+`_set()` helper that returns `False` gets ignored:
+
+| 19.5 habit | 22.0.368 reality | What it broke here |
+| --- | --- | --- |
+| `xform` parm `rotatex` | tuples `t`/`r`/`s`/`p`/`pr`, children `tx..tz`, `rx..rz` | the RBD lean never applied, so a fractured column sat upright and looked like a solver failure |
+| `scatter` parm `number` | `npts`; mode menu `generateby` → `bydensity`, `countperprimitive`, `texturespace` | a 20-site fracture scattered at default density: 11,067 prims |
+| `scatter` `stdswitcher` | absent | — |
+| `hou.Parm.val()` / `hou.ParmTuple.vals()` | `rawValue()`/`eval()`, tuple `eval()` | (not used here; would break any ported script) |
+| `boundingBox().minVec()` | `minvec()` | `framed_bounds` vanished behind a bare `except` |
+
+The rule these all teach: **bind a parm, then read the effect back off the
+geometry**. `rbd_fall` now returns `knobs` (which parm name it bound, which it could
+not), `site_points` (the real point count at the scatter output) and
+`bounds_after_energy`, so a dead knob is visible in the payload instead of being a
+mystery in the viewport.
+
+## Headless ↔ live parity
+
+`tools/fact_sheet.py` prints every claim on this page as JSON, from whichever
+interpreter runs it:
+
+```bash
+"<Houdini>/bin/hython" tools/fact_sheet.py --instances > facts_hython.json
+# inside a live session (read-only: no nodes created, never saved):
+#   m.collect(instances=False) -> write JSON
+python tools/fact_sheet.py --diff facts_hython.json facts_live.json
+```
+
+`instances=False` is the mode safe to run in someone else's open scene: it creates
+nothing, which is provable because the node count is identical before and after
+(13,533 → 13,533 on this box). `--instances` adds the real parm lists, and must not be
+used in a session you do not own: creating and deleting nodes marks the `.hip` as
+having unsaved changes.
+
 ## Nodes and parms
 
 | fact | detail |
@@ -136,7 +273,40 @@ solver.
 
 ## USD reality check
 
-`usd-pipeline export` wrote a real file: 239 bytes, `#usda 1.0`, with a
-`sublayer` reference to a second layer the ROP produced next to it. The reported
-`verify` block includes `sibling_usd_files` because reporting only the one path
-you were handed under-describes the stage on disk.
+A `usd` ROP and a SOP Import LOP write **two** files, and the one you asked for is
+not where the geometry lives:
+
+- The LOP authors its own layer through `savepath`, whose default is the template
+  `$HIP/usd/$OS.usd` (`enable_savepath` gates it).
+- The ROP writes `lopoutput` as a thin layer whose content is a
+  `subLayers = [@…/usd/<lopname>.usd@]` entry. Verified: 229–237 bytes.
+- Opening that file with pxr still composes the geometry correctly — `Traverse()`
+  returned the `Xform` **and** `/…/mesh_0` `Mesh` with all 16 points of a 4×4 grid —
+  so the export works, but it is not portable and byte count proves nothing.
+- `flattensoplayers` on the ROP was **verified to change nothing** for this setup, and
+  `sopimport asreference`/`flattenfilelayers`/`strippostlayers` made no difference
+  either. Do not sell a flatten flag as a fix.
+
+What actually makes an export travel: pin the LOP layer next to the output
+(`enable_savepath=1`, `savepath=<output dir>/<container>_sop.usd`). The subLayer entry
+then resolves as `./<container>_sop.usd` inside the output folder, and the Mesh still
+carries its points. `usd-pipeline export` does this by default
+(`keep_layers_together=true`) and reports `stage.self_contained`.
+
+The proof recipe a skill should return, not a byte count:
+
+```python
+from pxr import Usd
+stage = Usd.Stage.Open(path)                      # composes subLayers
+prims = list(stage.Traverse())                    # Stage has Traverse/TraverseAll only
+typed = [(str(p.GetPath()), str(p.GetTypeName())) # Prim.GetTypeName(), not GetType()
+         for p in prims]
+points = [len(p.GetAttribute("points").Get() or []) for p in prims
+          if p.GetAttribute("points") is not None]
+str(prims[0].GetPath())                           # Sdf.Path: pathString/str(), no .pathname
+```
+
+`export` compares the points it reads back against the SOP source point count and
+returns `geometry_points_in_stage` / `geometry_verified`; when companion layers resolve
+outside the output folder it returns `portability_note` naming them. Locked by
+`tests/test_tier_b.py::TestUsdExportLandsGeometry`.

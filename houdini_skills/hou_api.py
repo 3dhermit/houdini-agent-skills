@@ -53,6 +53,10 @@ class Session:
     def __init__(self, hou_mod, version: HoudiniVersion):
         self.hou = hou_mod
         self.version = version
+        # Paths created through this Session, in creation order. Builders take a
+        # mark and return their slice as `created_nodes`, so a caller in someone
+        # else's live scene can undo exactly what an action made.
+        self.created: list[str] = []
 
     # -- lifecycle ---------------------------------------------------------
     @classmethod
@@ -106,6 +110,23 @@ class Session:
                 n.parm("label").set(label)
             except Exception:
                 pass
+        self.created.append(n.path())
+        return n
+
+    def create_at(self, parent_path: str, node_type: str, name: str):
+        """Create a node when the type was already resolved by discovery.
+
+        Same tracking as create() - the path lands in self.created so a builder
+        can report every node it made - but without the type-list pre-check,
+        because callers of this have picked the type off the running build.
+        """
+        parent = self.node(parent_path)
+        try:
+            n = parent.createNode(node_type, name)
+        except Exception as exc:
+            raise SkillFailure("hou_error", str(exc), source="createNode",
+                               details={"type": node_type, "parent": parent_path})
+        self.created.append(n.path())
         return n
 
     def find(self, pattern: str, limit: int = 200) -> list[dict]:
@@ -213,7 +234,11 @@ class Session:
             return path
         obj = self.node("/obj")
         try:
-            obj.createNode("geo", name)
+            # through Session.create so the container is type-checked against
+            # /obj's real type list AND tracked in self.created
+            self.create("geo", name, "/obj")
+        except SkillFailure:
+            raise
         except Exception as exc:
             raise SkillFailure("hou_error", f"cannot create {path}: {exc}",
                                source="createNode", details={"type": "geo"})
@@ -302,7 +327,9 @@ class Session:
         return {"saved": target, "overwrote_existing": os.path.normpath(target) == os.path.normpath(path)}
 
     def frame_range(self) -> dict:
-        """Global playback range. Verified on 22.0.368: hou.playbar.frameRange().
+        """Global playback range. Verified on 22.0.368: hou.playbar.frameRange()
+        returns a **hou.Vector2** - index it as rng[0]/rng[1]; it has no
+        .start()/.end(), and those guesses raise AttributeError.
 
         hou.playbackBarMinFrame(), hou.fetchGlobalSetup() and hou.setFrameRange()
         do NOT exist on the hou module - the playbar object owns the range.
@@ -314,7 +341,8 @@ class Session:
                              (lambda: pb.playbackRange(), ("start", "end"))):
             try:
                 rng = getter()
-                return {"start": float(rng[0]), "end": float(rng[1]), "source": "hou.playbar"}
+                return {"start": float(rng[0]), "end": float(rng[1]),
+                        "type": type(rng).__name__, "source": "hou.playbar"}
             except Exception:
                 continue
         raise SkillFailure("hou_api_unavailable", "could not read the playback range",
@@ -374,9 +402,12 @@ class Session:
         }
         try:
             b = geo.boundingBox()
-            out["framed_bounds"] = {"min": list(b.minVec()), "max": list(b.maxVec())}
-        except Exception:
-            pass
+            # 22.0.368: BoundingBox spells these minvec()/maxvec() (lowercase v).
+            # The camelCase version raised AttributeError straight into the except
+            # below, so framed_bounds silently vanished from every stats payload.
+            out["framed_bounds"] = {"min": list(b.minvec()), "max": list(b.maxvec())}
+        except Exception as exc:
+            out["bounds_error"] = str(exc)[:160]
         return out
 
     # -- misc --------------------------------------------------------------

@@ -167,6 +167,70 @@ KNOWLEDGE_BASE = [
                     "test_wrangle_sop_type_name",
     },
     {
+        "id": "type-templates-under-report",
+        "match": r"parmTemplate(Group|s)?|unknown_parm|unresolved_parms",
+        "cause": "NodeType.parmTemplates() and parmTemplateGroup() list only what the "
+                 "type declares. Parms the framework adds at instance time are absent: "
+                 "grid sizex/sizey, filecache sopoutput/f1/f2, karma f1/resolutionx, "
+                 "USD ROP mkpath. A validator built on the type rejects parms that exist.",
+        "fix": "Read parms from an instance (node.parms() / node.parmTuples()). Use type "
+               "templates only for labels, folders and menu definitions.",
+        "verified": True,
+        "evidence": "verified on 22.0.368; locked by tests/test_tier_b.py::"
+                    "TestIntrospectionReality.test_type_templates_under_report_instance_parms",
+    },
+    {
+        "id": "opnodetype-no-parmtemplateset",
+        "match": r"has no attribute '?parmTemplateSet'?",
+        "cause": "parmTemplateSet() is on hou.NodeType, but category.nodeTypes() returns "
+                 "hou.OpNodeType, which exposes parmTemplates() and parmTemplateGroup().",
+        "fix": "Use node_type.parmTemplates() (a tuple of templates) or "
+               "node_type.parmTemplateGroup().find(name).",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (AttributeError even suggests parmTemplates); "
+                    "locked by TestIntrospectionReality.test_opnodetype_api_names",
+    },
+    {
+        "id": "parm-no-menu-item-identifier",
+        "match": r"menuItemIdentifier|menuItemLabels|menuItemValues",
+        "cause": "hou.Parm has exactly one menu accessor: menuItems(), a flat tuple of "
+                 "strings. There is no menuItemIdentifier/menuItemLabels/menuItemValues. "
+                 "MenuParmTemplate.menuItems() is likewise flat - it has no items() and "
+                 "does not return (label, identifier) pairs.",
+        "fix": "Match menu values by index or by the string itself, and confirm what a "
+               "parm expects by reading rawValue() after a set. Never unpack "
+               "menuItems() into pairs.",
+        "verified": True,
+        "evidence": "verified on 22.0.368; locked by "
+                    "TestIntrospectionReality.test_parm_menu_api_is_menuitems_only",
+    },
+    {
+        "id": "hipfile-no-dirty",
+        "match": r"hipFile' object has no attribute '(dirty|modified|suppressSaveOnExit)'",
+        "cause": "hou.hipFile has no dirty(), modified() or suppressSaveOnExit. The "
+                 "unsaved-changes check is hasUnsavedChanges().",
+        "fix": "hou.hipFile.hasUnsavedChanges() to test, .save()/.saveAndBackup() to write. "
+               "Never save someone else's session to prove a probe was harmless - prove it "
+               "by counting nodes before and after instead.",
+        "verified": True,
+        "evidence": "verified on 22.0.368; locked by "
+                    "TestIntrospectionReality.test_hipfile_dirty_check_is_hasUnsavedChanges",
+    },
+    {
+        "id": "nodetype-name-collision",
+        "match": r"nodeType|nodeTypes\(\)",
+        "cause": "Type names collide across categories on 22.0.368: karma is both a ROP "
+                 "and a LOP type, and SOP/LOP share 33 names (copytopoints, attribwrangle, "
+                 "cache, dopnet, null ...), ROP/LOP 17, SOP/OBJ 22. Looking a name up in "
+                 "the wrong category silently gives you a different tool.",
+        "fix": "Always qualify: hou.sopNodeTypeCategory().nodeTypes() vs "
+               "hou.lopNodeTypeCategory().nodeTypes(). Resolve types against the network "
+               "you are creating in (network.childTypeCategory()).",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (33 sop/lop, 17 rop/lop shared names); locked by "
+                    "TestIntrospectionReality.test_node_type_names_collide_across_categories",
+    },
+    {
         "id": "hou-no-allchildren",
         "match": r"has no attribute '?allChildren'?|ObjectWasDeleted",
         "cause": "hou.Node has no allChildren(); the recursive call is allSubChildren(). "
@@ -192,6 +256,162 @@ KNOWLEDGE_BASE = [
         "evidence": "verified on 22.0.368 by dumping node.parms() for filecache::2.0, "
                     "scatter::2.0, copytopoints::2.0 and karma; locked by "
                     "tests/test_tier_b.py::TestVerifiedApiFacts",
+    },
+    {
+        "id": "parm-parmtuple-value-accessors",
+        "match": r"has no attribute '(val|vals|getValue)'",
+        "cause": "hou.Parm has no val()/vals()/getValue(), and hou.ParmTuple has no "
+                 "rawValue()/vals()/val()/parms(). 19.5-era scripts use parm.val() and "
+                 "parmTuple.vals() constantly, so this breaks on porting. On 22.0.368 "
+                 "Parm exposes rawValue() (menu identifier string) and eval() (menu "
+                 "index); ParmTuple exposes eval() - the only tuple value reader.",
+        "fix": "Read a single parm with parm.rawValue() (strings/menus) or parm.eval() "
+               "(numbers/objects); read a tuple with parmTuple.eval(). Write with "
+               "parm.set() / parmTuple.set((x, y, z)).",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (dir() plus AttributeError suggestions); locked "
+                    "by tests/test_tier_b.py::TestHoudini22ApiSpellings.test_parm_value_accessors",
+    },
+    {
+        "id": "boundingbox-minvec-lowercase",
+        "match": r"has no attribute 'minVec'|has no attribute 'maxVec'",
+        "cause": "hou.BoundingBox spells its corners minvec()/maxvec() with a lowercase v. "
+                 "minVec()/maxVec() is the natural camelCase guess; when it sits inside a "
+                 "bare except it drops bounds silently instead of failing.",
+        "fix": "Use b.minvec()/b.maxvec() (or b.minvec3()/b.maxvec3()); if a bounds probe "
+               "returns nothing, check for the swallowed AttributeError before believing "
+               "the geometry is empty.",
+        "verified": True,
+        "evidence": "verified on 22.0.368; this repo's own geometry_stats lost framed_bounds "
+                    "for exactly this reason; locked by "
+                    "tests/test_tier_b.py::TestHoudini22ApiSpellings.test_bounding_box_is_lowercase_vec",
+    },
+    {
+        "id": "xform-no-rotatex-use-rx",
+        "match": r"rotatex|rotatey|rotatez|translatey",
+        "cause": "The xform SOP on 22.0.368 has no rotatex/translatey parms. It exposes the "
+                 "t/r/s (and p/pr/xOrd) parm tuples whose children are tx,ty,tz and rx,ry,rz. "
+                 "A skill that set 'rotatex' returned False and was ignored, so an RBD column "
+                 "never leaned - and a column with no potential energy honestly never falls, "
+                 "which reads like a solver problem.",
+        "fix": "Set xform.parm('rx') / parmTuple('r').set((x,y,z)) and xform.parm('ty'); then "
+               "prove it by comparing boundingBox extents before and after, not by trusting "
+               "the set call.",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (parm('rotatex') is None; rx=12 + ty=1 moved the box "
+                    "to y -0.571..2.571, z -0.801..0.801); locked by "
+                    "tests/test_tier_b.py::TestHoudini22ApiSpellings.test_xform_uses_tuple_children_not_rotatex",
+    },
+    {
+        "id": "scatter-no-number-use-npts",
+        "match": r"'number'.*scatter|scatter.*'number'|stdswitcher",
+        "cause": "scatter::2.0 on 22.0.368 has no `number` parm (and no 19.5-era "
+                 "stdswitcher). Point count is `npts`; the mode menu `generateby` offers "
+                 "exactly bydensity, countperprimitive, texturespace. Silent no-ops here are "
+                 "how a 20-site fracture turns into an 11,067-prim explosion.",
+        "fix": "Bind the count through npts (with fallbacks), then read the real point count "
+               "off the cooked geometry and report it, so a knob that did not land is visible.",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (npts=7 cooked exactly 7 points); locked by "
+                    "tests/test_tier_b.py::TestHoudini22ApiSpellings.test_scatter_counts_points_through_npts",
+    },
+    {
+        "id": "usd-export-layers-not-self-contained",
+        "match": r"portability_note|self_contained|subLayers",
+        "cause": "A `usd` ROP pointed at a SOP Import LOP writes the requested file as a thin "
+                 "layer whose only content is a subLayers entry; the geometry is authored by "
+                 "the LOP into its own layer at `savepath` (default '$HIP/usd/$OS.usd'). The "
+                 "composed stage is correct, but the folder is not portable and bytes-on-disk "
+                 "proved nothing. Verified: `flattensoplayers` changed nothing for this setup.",
+        "fix": "Set the LOP's enable_savepath=1 and savepath=<output dir>/<name>.usd so both "
+               "files land together (subLayer then resolves as './<name>.usd'). Prove an export "
+               "by opening it with pxr and counting prims that carry a points attribute, "
+               "compared against the SOP source point count.",
+        "verified": True,
+        "evidence": "verified on 22.0.368 (default run wrote a 229-byte pointer layer plus a "
+                    "SOP layer under $HIP; with savepath pinned, subLayer = './a_sop.usd' and "
+                    "the Mesh still had all 16 points); locked by "
+                    "tests/test_tier_b.py::TestUsdExportLandsGeometry",
+    },
+    {
+        "id": "pxr-usd-accessor-spellings",
+        "match": r"TraverseAllPims|TraverseAllPrims|has no attribute 'GetType'|has no attribute 'pathname'",
+        "cause": "pxr in Houdini 22: Usd.Stage has only Traverse() and TraverseAll(); "
+                 "Usd.Prim's type accessor is GetTypeName() (no GetType()); Sdf.Path has "
+                 "pathString/str() (no .pathname). A hasattr() guard around a misspelling "
+                 "turns the bug into a silent None.",
+        "fix": "Usd.Stage.Open(p).Traverse(), prim.GetTypeName(), str(prim.GetPath()). Never "
+               "wrap a guessed accessor in hasattr - assert the spelling in a test instead.",
+        "verified": True,
+        "evidence": "verified on 22.0.368 pxr; locked by "
+                    "tests/test_tier_b.py::TestHoudini22ApiSpellings.test_pxr_spellings_used_by_verify",
+    },
+    {
+        "id": "node-type-categories-accessor",
+        "match": r"categoryAllAsDictionary|nodeTypeCategories|no pyro",
+        "cause": "The accessor is hou.nodeTypeCategories() (there is no "
+                 "categoryAllAsDictionary). Categories are Chop, ChopNet, Cop, Cop2, CopNet, "
+                 "Data, Director, Dop, Driver, Lop, Manager, Object, Shop, Sop, Top, TopNet, "
+                 "Vop, VopNet. Searching only /obj types says 'pyro does not exist': on "
+                 "22.0.368 pyro appears as 3 Dop, 14 Sop, 36 Cop, 23 Vop, 3 Shop and 71 Data "
+                 "types. Bare names also collide - karma is a ROP and a LOP type.",
+        "fix": "Iterate hou.nodeTypeCategories() and report each hit with its category; create "
+               "the node inside a network of that category.",
+        "verified": True,
+        "evidence": "verified on 22.0.368; locked by "
+                    "tests/test_tier_b.py::TestHoudini22ApiSpellings.test_node_type_categories_cover_pyro",
+    },
+    {
+        "id": "hou-ui-absent-in-hython",
+        "match": r"module 'hou' has no attribute 'ui'|has no attribute 'setCurrentNode'|has no attribute 'internalName'",
+        "cause": "hou.ui exists only in a GUI product - hython/hbatch have no hou.ui at all, "
+                 "so any pane call is GUI-only. The hou module also has no setCurrentNode, and "
+                 "hou.PaneTabType values expose only name() (no internalName/internalType/"
+                 "enumerationName).",
+        "fix": "Guard pane work with hasattr(hou, 'ui') and report it as unavailable in "
+               "headless runs. To move a network editor view in the GUI: "
+               "hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor).setCurrentNode(node).",
+        "verified": True,
+        "evidence": "verified in hython 22.0.368 (AttributeError: module 'hou' has no "
+                    "attribute 'ui') and in the live GUI, where hou.ui.paneTabs() returned "
+                    "12 tabs and hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor) returned "
+                    "a pane whose currentNode() was /obj/rbd/rbd_solver1. "
+                    "PaneTabType.name() returned 'NetworkEditor'; no other PaneTabType "
+                    "accessor exists. setCurrentNode() on that pane was deliberately not "
+                    "called - it would move someone else's viewport.",
+    },
+    {
+        "id": "live-session-module-cache",
+        "match": r"KeyError.*'knobs'|old payload shape|edited skill had no effect",
+        "cause": "Houdini's Python keeps imported modules in sys.modules between calls, so "
+                 "a skill layer edited on disk is NOT reloaded inside a running GUI "
+                 "session. A live run then returns the pre-edit payload shape (a KeyError "
+                 "on a key the new code adds, or a fix that 'does nothing').",
+        "fix": "At the top of any script injected into a live session, purge the layer "
+               "before importing it: "
+               "`for k in [k for k in list(sys.modules) if k.split('.')[0] in "
+               "('houdini_skills', 'skills')]: del sys.modules[k]`. Then re-import. "
+               "Verify the new shape is present before trusting a negative result.",
+        "verified": True,
+        "evidence": "live session on 22.0.368 raised KeyError 'knobs' on a run before the "
+                    "purge was added, and returned the full knobs payload after it; the "
+                    "purging runner is what all later live smokes used",
+    },
+    {
+        "id": "builder-leftover-dopnet",
+        "match": r"leftover|_dopnet|asm_live.*still present",
+        "cause": "Simulation builders make nodes in more than one place: the container you "
+                 "named at /obj plus a separate dopnet object (/obj/<container>_dopnet). "
+                 "A caller that destroys only the container leaks the dopnet, and each run "
+                 "leaks another one (_dopnet1, _dopnet2).",
+        "fix": "Destroy the payload's `created_nodes` list, deepest paths first - every "
+               "builder and exporter now reports it, including the /out ROP and the LOP in "
+               "/stage. Prove the scene is clean by node count: "
+               "len(hou.node('/').allSubChildren()) before == after.",
+        "verified": True,
+        "evidence": "live smokes left /obj/asm_live_rbd_dopnet{,1,2} while destroying only "
+                    "the named containers; after created_nodes landed, a live run went "
+                    "13533 -> 13533 nodes with swept_leaked_paths == []",
     },
 ]
 

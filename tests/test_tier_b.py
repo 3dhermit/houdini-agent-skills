@@ -18,6 +18,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# Hyphenated skill folders load by file path, never by import path.
+from skills import import_skill_module  # noqa: E402
+
 
 def _session():
     from houdini_skills.hou_api import Session
@@ -285,7 +288,30 @@ class TestSimSetup(unittest.TestCase):
         self.assertTrue(result["not_done"], "must state what it did not do")
         self.assertEqual(result["cook"]["errors"], 0, "fracture chain must cook clean")
         self.assertTrue(result["site_points_wired"])
-        self.assertGreater(result["source_pieces"], 10)
+        # A prim count is not a piece count. The old payload reported prim_count as
+        # `source_pieces` (11,067 "pieces" for a 20-site fracture), which is exactly
+        # the kind of confident wrong number an agent then designs a shot around.
+        self.assertIn("source_prims", result)
+        self.assertIn("source_pieces_by_name", result)
+        self.assertNotIn("source_pieces", result)
+        self.assertEqual(result["knobs"]["unbound"], [],
+                         "energy knobs must all bind on this build: %s" % result["knobs"])
+        self.assertTrue(result["energy"]["lean_applied"], "lean must actually be applied")
+        self.assertTrue(result["energy"]["drop_applied"], "drop must actually be applied")
+        self.assertEqual(result["knobs"]["site_count_parm"], "npts",
+                         "scatter point count parm changed again")
+        self.assertEqual(result["site_points"], result["site_count_requested"],
+                         "requested scatter sites did not land in the geometry")
+        b = result["bounds_after_energy"]
+        self.assertTrue(b and "min" in b and "max" in b,
+                        "bounds proof must come back: %s" % b)
+        # A 12-degree lean on a 1x3x1 column must show up in the extents: the z span
+        # grows past 1.0 and the y span past 3.0. Numbers here were read off
+        # 22.0.368 (z -0.801..0.801, y -0.571..2.571 after a 1.0 lift).
+        self.assertGreater(b["max"][2] - b["min"][2], 1.0,
+                           "lean did not spread the z extents - rx is a no-op again")
+        self.assertGreater(b["max"][1] - b["min"][1], 3.0,
+                           "lean did not change the y extents")
         self.s.destroy_matching("/obj/asmsim_*")
         self.s.destroy_matching("/out/asmsim_*")
 
@@ -482,6 +508,390 @@ class TestLargeScene(unittest.TestCase):
         self.assertLess(time.perf_counter() - t0, 10.0, "bulk delete went quadratic")
         self.assertGreaterEqual(len(gone), 200,
                                 f"destroy_matching reported {len(gone)} of 200")
+
+
+class TestIntrospectionReality(unittest.TestCase):
+    """Type-level introspection is not instance truth - proven, not assumed.
+
+    Found while writing tools/fact_sheet.py: I nearly shipped a parm validator built
+    on NodeType templates. On 22.0.368 those templates do NOT contain parms the
+    framework adds at instance time - grid `sizex`/`sizey`, File Cache `sopoutput`/
+    `f1`/`f2`, Karma `f1`/`resolutionx`, USD ROP `mkpath` are all absent from the type
+    and present on a real node. A validator built on them rejects parms that exist.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asmi_*")
+        self.s.destroy_matching("/out/asmi_*")
+
+    def test_opnodetype_api_names(self):
+        node_type = self.hou.sopNodeTypeCategory().nodeTypes()["grid"]
+        self.assertTrue(hasattr(node_type, "parmTemplates"), "parmTemplates gone")
+        self.assertTrue(hasattr(node_type, "parmTemplateGroup"))
+        self.assertFalse(hasattr(node_type, "parmTemplateSet"),
+                         "parmTemplateSet now exists on OpNodeType - doc is stale")
+
+    def test_type_templates_under_report_instance_parms(self):
+        declared = {t.name() for t
+                    in self.hou.sopNodeTypeCategory().nodeTypes()["grid"].parmTemplates()}
+        geo = self.s.ensure_geo("asmi_tpl")
+        grid = self.s.create("grid", "asmi_tpl_grid", geo)
+        real = set(self.s.parm_names(grid.path()))
+        self.assertIn("sizex", real, "grid lost sizex - bigger doc problem than this one")
+        self.assertNotIn("sizex", declared,
+                         "type templates now declare sizex; the under-report fact changed")
+
+    def test_hipfile_dirty_check_is_hasUnsavedChanges(self):
+        self.assertTrue(hasattr(self.hou.hipFile, "hasUnsavedChanges"))
+        for wrong in ("dirty", "modified", "suppressSaveOnExit"):
+            self.assertFalse(hasattr(self.hou.hipFile, wrong),
+                             f"hou.hipFile.{wrong} exists now - update the doc")
+
+    def test_parm_menu_api_is_menuitems_only(self):
+        geo = self.s.ensure_geo("asmi_menu")
+        wrangle = self.s.create("attribwrangle", "asmi_menu_w", geo)
+        parm = wrangle.parm("class")
+        items = parm.menuItems()
+        self.assertTrue(items and all(isinstance(x, str) for x in items),
+                        "parm.menuItems() no longer returns flat strings")
+        for wrong in ("menuItemIdentifier", "menuItemLabels", "menuItemValues"):
+            self.assertFalse(hasattr(parm, wrong),
+                             f"hou.Parm.{wrong} exists now - the doc says it does not")
+
+    def test_node_type_names_collide_across_categories(self):
+        """`karma` is a ROP *and* a LOP type; 33 names are shared by SOP and LOP.
+        Any type lookup by bare name must say which category it meant."""
+        sop = set(self.hou.sopNodeTypeCategory().nodeTypes())
+        lop = set(self.hou.lopNodeTypeCategory().nodeTypes())
+        rop = set(self.hou.ropNodeTypeCategory().nodeTypes())
+        self.assertIn("karma", rop)
+        self.assertIn("karma", lop, "karma is no longer a LOP type - collision note stale")
+        self.assertIn("copytopoints", sop & lop)
+        self.assertIn("fetch", rop, "the ROP fetch driver was renamed again")
+        for gone in ("fetchnetwork", "driver"):
+            self.assertNotIn(gone, rop, f"{gone} appeared in /out - recheck the table")
+
+
+@REAL_ONLY
+class TestSchemaEnumsMatchRealMenus(unittest.TestCase):
+    """A schema enum the running build cannot honour is a lie in the contract.
+
+    A live run on 22.0.368 took wrangle_kind='volume' straight through JSON Schema
+    and only failed at the node's own menu, so the enum has to stay inside what the
+    menu offers - and the resolver has to keep rejecting what the menu lacks.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+        self.s.destroy_matching("/obj/asm_enumchk*")
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asm_enumchk*")
+
+    def test_wrangle_kind_enum_resolves_against_the_class_menu(self):
+        import json
+        vex = import_skill_module("vex-helper")
+        meta_path = os.path.join(ROOT, "skills", "vex-helper", "meta.json")
+        with open(meta_path, encoding="utf-8") as fh:
+            enum = json.load(fh)["actions"]["validate"]["properties"]["wrangle_kind"]["enum"]
+        geo = self.hou.node("/obj").createNode("geo", "asm_enumchk")
+        try:
+            wrangle = geo.createNode("attribwrangle")
+            menu = list(wrangle.parm("class").menuItems())
+            self.assertTrue(menu, "the wrangle class menu came back empty")
+            for value in enum:
+                try:
+                    index, seen = vex._class_index(wrangle, value)
+                except Exception as exc:  # noqa: BLE001
+                    self.fail(f"enum value {value!r} does not resolve on "
+                              f"{self.s.version} (menu={menu}): {exc}")
+                self.assertIsInstance(index, int)
+            for bogus in ("volume", "not-a-class"):
+                with self.assertRaises(vex.SkillFailure) as ctx:
+                    vex._class_index(wrangle, bogus)
+                self.assertEqual(ctx.exception.err.kind, "parm_choice_unavailable")
+                self.assertIn("menu items", ctx.exception.err.hint or "",
+                              "the error should name the real choices")
+        finally:
+            geo.destroy()
+
+    def test_hou_module_has_no_setcurrentnode(self):
+        """Restoring a *network editor view* is a pane operation, not a hou module call."""
+        self.assertFalse(hasattr(self.hou, "setCurrentNode"),
+                         "hou.setCurrentNode exists now - the KB entry is stale")
+
+
+@REAL_ONLY
+class TestCreatedNodeAccounting(unittest.TestCase):
+    """A builder in someone else's live scene must be undoable by its own payload.
+
+    Live smoke runs left `/obj/<container>_dopnet` objects behind because the
+    dopnet lives outside the container the caller named. `created_nodes` closes
+    that gap; this test destroys via the payload and proves nothing remained.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+        self.sim = import_skill_module("simulation-tools")
+
+    def tearDown(self):
+        for n in self.hou.node("/obj").children():
+            if n.name().startswith("asm_t_dop"):
+                n.destroy()
+
+    def test_created_nodes_covers_everything_built(self):
+        out = self.sim.run("rbd_fall", {"container": "asm_t_dop", "frames": [1, 10],
+                                        "voronoi_points": 8, "lean_degrees": 9,
+                                        "drop_distance": 0.5})
+        made = out["created_nodes"]
+        self.assertIn("/obj/asm_t_dop", made)
+        self.assertIn(out["dopnet"], made)
+        self.assertNotEqual(out["dopnet"], "/obj/asm_t_dop")
+        for path in made:
+            self.assertIsNotNone(self.hou.node(path), f"{path} reported but absent")
+
+        # destroy in reverse order (children before parents) and verify the scene
+        # is clean of this action's work
+        for path in sorted(set(made), reverse=True):
+            node = self.hou.node(path)
+            if node is not None:
+                node.destroy()
+        left = [p for p in made if self.hou.node(p) is not None]
+        self.assertEqual(left, [], "destroying created_nodes left: %s" % left)
+
+    def test_usd_export_reports_rop_and_lop(self):
+        usd = import_skill_module("usd-pipeline")
+        out = self.sim.run("rbd_fall", {"container": "asm_t_dop2", "frames": [1, 5],
+                                        "voronoi_points": 4})
+        sop_src = out["fracture_chain"][0]
+        path = os.path.join(tempfile.gettempdir(), "houdini_agent_skills_acct.usda")
+        try:
+            res = usd.run("export", {"path": sop_src, "output": path,
+                                     "container": "asm_t_dop2_usd"})
+        finally:
+            self.s.destroy_matching("/obj/asm_t_dop2*")
+            self.s.destroy_matching("/out/asm_t_dop2*")
+            self.s.destroy_matching("/stage/asm_t_dop2*")
+        made = res["created_nodes"]
+        self.assertIn("/out/asm_t_dop2_usd", made)
+        self.assertTrue(any("/stage" in p for p in made),
+                        "the LOP it made is missing from created_nodes: %s" % made)
+        for p in made:
+            self.assertIsNone(self.hou.node(p), "cleanup left %s alive" % p)
+
+    def test_grid_bevel_reports_container_and_nodes(self):
+        sopmod = import_skill_module("sop-automation")
+        try:
+            res = sopmod.run("grid_bevel", {"container": "asm_t_dop3",
+                                            "size": [1.0, 1.0], "divisions": 2,
+                                            "bevel_width": 0.02})
+            made = res["created_nodes"]
+            self.assertIn("/obj/asm_t_dop3", made)
+            self.assertIn(res["grid"], made)
+            self.assertIn(res["bevel"], made)
+        finally:
+            self.s.destroy_matching("/obj/asm_t_dop3*")
+
+
+class TestHoudini22ApiSpellings(unittest.TestCase):
+    """Names that 19.5 scripts rely on, proven absent on 22.0.368.
+
+    Every one of these failed inside a bare `except` or a `hasattr` guard before it
+    was caught, which is why the code looked like it worked. If Houdini adds a name
+    back, these tests fire and the docs get updated.
+
+    Note: `.eval()` below is Houdini's hou.Parm/hou.ParmTuple value getter (the only
+    way to read a tuple on this build), not Python's eval() - no arbitrary code runs.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+        self.s.destroy_matching("/obj/asm22_*")
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asm22_*")
+        self.s.destroy_matching("/out/asm22_*")
+        self.s.destroy_matching("/stage/asm22_*")
+
+    def test_parm_value_accessors(self):
+        geo = self.hou.node("/obj").createNode("geo", "asm22_parm")
+        w = geo.createNode("attribwrangle")
+        parm, tup = w.parm("class"), w.parmTuple("class")
+        self.assertTrue(hasattr(parm, "rawValue") and hasattr(parm, "eval"))
+        self.assertEqual(parm.rawValue(), "point", "menu parms must report the identifier")
+        self.assertEqual(parm.eval(), 2, "menu eval must report the index")
+        for gone in ("val", "vals", "getValue"):
+            self.assertFalse(hasattr(parm, gone), f"hou.Parm.{gone} is back - recheck docs")
+        # ParmTuple reads through eval(); rawValue/vals/parms do not exist on it.
+        self.assertEqual(tup.eval(), (2,))
+        for gone in ("rawValue", "vals", "val", "parms"):
+            self.assertFalse(hasattr(tup, gone), f"hou.ParmTuple.{gone} is back - recheck docs")
+
+    def test_bounding_box_is_lowercase_vec(self):
+        geo = self.hou.node("/obj").createNode("geo", "asm22_bb")
+        grid = geo.createNode("grid")
+        b = grid.geometry().boundingBox()
+        self.assertTrue(hasattr(b, "minvec") and hasattr(b, "maxvec"))
+        for gone in ("minVec", "maxVec"):
+            self.assertFalse(hasattr(b, gone), f"hou.BoundingBox.{gone} is back - revert docs")
+        stats = self.s.geometry_stats(grid.path())
+        self.assertIn("framed_bounds", stats, "geometry_stats lost its bounds proof")
+        self.assertNotIn("bounds_error", stats)
+
+    def test_xform_uses_tuple_children_not_rotatex(self):
+        geo = self.hou.node("/obj").createNode("geo", "asm22_xf")
+        box = geo.createNode("box")
+        box.parm("sizex").set(1.0); box.parm("sizey").set(3.0); box.parm("sizez").set(1.0)
+        xf = geo.createNode("xform"); xf.setInput(0, box)
+        before = [list(v) for v in (xf.geometry().boundingBox().minvec(),
+                                    xf.geometry().boundingBox().maxvec())]
+        self.assertIsNone(xf.parm("rotatex"),
+                          "xform gained rotatex again - the lean fallback list can shrink")
+        self.assertTrue(xf.parm("rx") is not None and xf.parm("ty") is not None)
+        xf.parm("rx").set(12.0)
+        xf.parm("ty").set(1.0)
+        after = [list(v) for v in (xf.geometry().boundingBox().minvec(),
+                                   xf.geometry().boundingBox().maxvec())]
+        self.assertNotEqual(before, after, "rx/ty must actually move geometry")
+
+    def test_scatter_counts_points_through_npts(self):
+        geo = self.hou.node("/obj").createNode("geo", "asm22_sc")
+        box = geo.createNode("box")
+        sc = geo.createNode("scatter"); sc.setInput(0, box)
+        self.assertIsNone(sc.parm("number"), "scatter has a `number` parm again")
+        sc.parm("npts").set(7)
+        self.assertEqual(len(sc.geometry().points()), 7, "npts no longer drives the count")
+        menu = list(sc.parm("generateby").menuItems())
+        self.assertEqual(menu, ["bydensity", "countperprimitive", "texturespace"],
+                         "scatter generateby menu changed on this build")
+
+    def test_pane_tab_type_only_has_name(self):
+        ne = self.hou.paneTabType.NetworkEditor
+        self.assertEqual(ne.name(), "NetworkEditor")
+        for gone in ("internalName", "internalType", "enumerationName"):
+            self.assertFalse(hasattr(ne, gone), f"PaneTabType.{gone} is back - update the doc")
+        # hou.ui exists only in a GUI product; hython has no panes at all.
+        if not hasattr(self.hou, "ui"):
+            self.skipTest("hou.ui is absent in hython; pane facts are GUI-only")
+
+    def test_pxr_spellings_used_by_verify(self):
+        from pxr import Sdf, Usd
+        self.assertTrue(hasattr(Usd.Stage, "Traverse") and hasattr(Usd.Stage, "TraverseAll"))
+        for gone in ("TraverseAllPims", "TraverseAllPrims"):
+            self.assertFalse(hasattr(Usd.Stage, gone),
+                             f"Usd.Stage.{gone} exists now - recheck the verify helper")
+        self.assertTrue(hasattr(Usd.Prim, "GetTypeName"),
+                        "Usd.Prim.GetTypeName is gone - the proof helper needs a new name")
+        self.assertFalse(hasattr(Usd.Prim, "GetType"),
+                         "Usd.Prim.GetType exists now - the camelCase habit would work")
+        path = Sdf.Path("/world/thing")
+        self.assertEqual(path.pathString, "/world/thing")
+        self.assertFalse(hasattr(path, "pathname"),
+                         "Sdf.Path.pathname exists now - the str() conversion note can go")
+
+    def test_playbar_range_is_a_vector2(self):
+        rng = self.hou.playbar.frameRange()
+        self.assertEqual(type(rng).__name__, "Vector2")
+        for guessed in ("start", "end"):
+            self.assertFalse(hasattr(rng, guessed),
+                             "hou.playbar.frameRange() %s() exists after all" % guessed)
+        self.assertLessEqual(float(rng[0]), float(rng[1]))
+
+    def test_node_type_categories_cover_pyro(self):
+        probe = import_skill_module("simulation-tools")
+        out = probe.run("probe_types", {"contains": "pyro"})
+        cats = out["by_category"]
+        self.assertIn("Dop", cats, "pyro solver types vanished from the Dop category")
+        self.assertIn("Sop", cats, "pyro SOP types vanished")
+        self.assertIn("pyrosolver", [t["type"] for t in out["types"] if t["category"] == "Sop"]
+                      + cats["Dop"]["sample"])
+        self.assertTrue(out["categories_searched"], "must say what it searched")
+
+
+@REAL_ONLY
+class TestUsdExportLandsGeometry(unittest.TestCase):
+    """`lopoutput` alone is not proof of geometry on 22.0.368.
+
+    A `usd` ROP pointed at a SOP Import LOP writes a layer whose only content is a
+    subLayers reference to a layer the LOP generated somewhere else, so the requested
+    file can exist, be non-empty, and hold nothing. The skill now binds the ROP's own
+    `flattensoplayers` and reports what the file really contains.
+    """
+
+    def setUp(self):
+        self.s = _session()
+        self.hou = self.s.hou
+        self.s.destroy_matching("/obj/asm22usd_*")
+        self.s.destroy_matching("/out/asm22usd_*")
+        self.s.destroy_matching("/stage/asm22usd_*")
+        self.usd = import_skill_module("usd-pipeline")
+
+    def tearDown(self):
+        self.s.destroy_matching("/obj/asm22usd_*")
+        self.s.destroy_matching("/out/asm22usd_*")
+        self.s.destroy_matching("/stage/asm22usd_*")
+
+    def _grid(self):
+        geo = self.hou.node("/obj").createNode("geo", "asm22usd_geo")
+        return geo.createNode("grid")
+
+    def test_export_pins_layers_next_to_output_and_proves_geometry(self):
+        import tempfile
+        grid = self._grid()
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "flat.usda")
+            res = self.usd.run("export", {"path": grid.path(), "output": out,
+                                          "container": "asm22usd_rop"})
+            self.assertTrue(res["exists"])
+            # The proof that matters: a prim carrying a `points` attribute in the
+            # composed stage, matching the SOP source point count.
+            self.assertTrue(res["stage"]["geometry_prims"],
+                            "no prim with a points attribute in the exported stage")
+            self.assertEqual(res["geometry_points_in_stage"], res["source_point_count"],
+                             "USD point count must equal the SOP source point count")
+            self.assertTrue(res["geometry_verified"])
+            self.assertTrue(res["stage"]["self_contained"],
+                            "the SOP layer must land beside the requested file: %s"
+                            % res["stage"]["external_layer_files"])
+            self.assertNotIn("warning", res)
+            self.assertNotIn("portability_note", res)
+            ver = self.usd.run("verify", {"output": out})
+            self.assertGreaterEqual(ver["stage"]["prim_count"], 1,
+                                    "verify must count prims, not just bytes")
+            self.assertTrue(ver["stage"]["prim_types"], "verify must report prim types")
+            self.assertTrue(ver["stage"]["geometry_prims"], "verify must find geometry")
+
+    def test_keep_layers_together_off_reports_where_layers_live(self):
+        import tempfile
+        grid = self._grid()
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "split.usda")
+            res = self.usd.run("export", {"path": grid.path(), "output": out,
+                                          "container": "asm22usd_ptr",
+                                          "keep_layers_together": False})
+            self.assertTrue(res["exists"], "the pointer layer still gets written")
+            # Geometry still composes - the layers are merely scattered under $HIP.
+            self.assertEqual(res["geometry_points_in_stage"], res["source_point_count"])
+            self.assertFalse(res["stage"]["self_contained"],
+                             "Houdini's default $HIP/usd layer must be reported as external")
+            self.assertIn("portability_note", res,
+                          "a split export must say where the companion layers are")
+            self.assertTrue(res["stage"]["external_layer_files"])
+            # Remove only the exact companion file this run named, never a directory.
+            for entry in res["stage"]["external_layer_files"]:
+                path = entry.get("resolved")
+                if path and entry.get("exists") and os.path.dirname(path) != td:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
 
 
 if __name__ == "__main__":
