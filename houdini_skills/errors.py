@@ -51,6 +51,22 @@ class SkillFailure(Exception):
     def kind(self) -> str:
         return self.err.kind
 
+    def __str__(self) -> str:
+        """Include the hint and the closest matches.
+
+        Agents usually see str(exception), not to_result(): when the suggestion lives
+        only in `hint`, a refusal like "'polyexdiv' is not valid under /obj/..." tells
+        them what failed and not what to type instead. Verified in live pass 9c, where
+        the SkillFailure carried 'closest: subdivide, ...' but str() dropped it.
+        """
+        parts = [self.err.message]
+        if self.err.hint:
+            parts.append(self.err.hint)
+        text = " | ".join(p for p in parts if p)
+        if self.err.source:
+            text += f" (in {self.err.source})"
+        return text
+
     def to_result(self) -> dict:
         return {"ok": False, "error": self.err.to_dict()}
 

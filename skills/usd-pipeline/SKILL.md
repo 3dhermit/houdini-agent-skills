@@ -26,7 +26,7 @@ the USD is empty.
 |---|---|---|
 | `export` | `path, output, container, frames, keep_layers_together, flatten_sop_layers, default_prim` | absolute path, bytes, `stage` (prims, types, point counts, `self_contained`), `geometry_verified`, `knobs`, `portability_note` |
 | `verify` | `output` | exists, bytes, and a pxr read of the stage: prim paths/types, point counts, resolved sublayer files |
-| `sopimport` | `stage, path, prim_path` | the LOP it created |
+| `sopimport` | `stage, path, prim_path` | the LOP it created, plus `stage_prim_paths`, `stage_prim_stats` and the `primpath` read-back |
 
 ```bash
 hython -m houdini_skills.cli usd-pipeline export \
@@ -66,6 +66,19 @@ wrong and are pinned by tests: `Usd.Stage.Traverse()`/`TraverseAll()` (no
 `loppath`, `lopoutput`, `trange` (`off, normal, on, stage`), `f1`/`f2`,
 `mkpath`, `execute`, `flattensoplayers`; SOP Import: `soppath`, `primpath`,
 `enable_savepath`, `savepath`.
+
+## The `primpath` trap (live pass 9c)
+`sopimport` used to echo the requested `prim_path` back without binding anything. It now
+binds `primpath` (label 'Primitive Path', default `'/$OS'`) **and reports the stage**
+alongside it, because on 22.0.368 the two disagree: `primpath` reads back `/world` while
+`stage().Traverse()` still yields `/HoudiniLayerInfo`, `/<node>`, `/<node>/mesh_0` —
+verified on the importing node and one LOP downstream through a `null` LOP. So the
+payload returns `prim_path_requested`, `prim_path_kept`, `stage_prim_paths`,
+`stage_prim_stats` (`Mesh:Total`, `Xform:Total`) and `prim_path_readback_note` when the
+value and the stage do not line up. `prim_path` has **no schema default** for exactly this
+reason — pass it only when you have a use for it. Read the stage from a **LOP node**:
+`hou.LopNetwork` has no `stage()` and no `displayLop()`, and the container type is
+`lopnet`, not `lop`.
 
 ## Undo what an action made
 `export` and `sopimport` return `created_nodes` — the `/out` ROP **and** the LOP (in

@@ -176,7 +176,7 @@ Generate VEX from intent, lint it without Houdini, and compile-check it for real
 - `lint` - required: code; optional: none
 - `list_templates` - required: none; optional: none
 - `template` - required: template; optional: overrides, wrangle_kind
-- `validate` - required: none; optional: code, container, keep, template, wrangle_kind
+- `validate` - required: none; optional: code, container, keep, node_type, template, wrangle_kind
 
 **Examples**
 ```bash

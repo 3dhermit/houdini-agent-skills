@@ -22,6 +22,7 @@ SUPPORTED = series_range((19, 5), (22, 0))
 
 TEMPLATES: dict[str, dict] = {
     "point_displacement_noise": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "point",
         "requires": ["@N on the input geometry"],
         "summary": "Displace points along their normal by layered noise.",
@@ -35,6 +36,7 @@ float n = noise(@P * frequency);
 """,
     },
     "slope_mask": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "point",
         "requires": ["@N"],
         "summary": "Writes f@steepness (0 flat .. 1 vertical) for slope-driven scattering.",
@@ -46,6 +48,7 @@ f@steepness = 1.0 - clamp(align, 0.0, 1.0);
 """,
     },
     "curl_noise_velocity": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "point",
         "requires": [],
         "summary": "Divergence-free swirl field into v@vel (pop/pyro seeding).",
@@ -57,6 +60,7 @@ v@vel = curlnoise(@P * frequency) * amplitude;
 """,
     },
     "random_packed_scale": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "prim",
         "requires": ["compiles on any primitive input; feed f@piece_scale into a Pack/"
                      "Transform for packed prims rather than writing @scale directly"],
@@ -74,8 +78,26 @@ v@piece_scale3 = set(s, s, s);
 """,
     },
     "volume_density_falloff": {
-        "wrangle_kind": "volume",
-        "requires": ["a volume with f@density"],
+        # Not an Attribute Wrangle. Verified on 22.0.368: `volumewrangle` is a real SOP
+        # type with `snippet`, `autobind`, `bindeach`, `bindings`, `exportlist`, `group`
+        # and NO `class` parm; this snippet cooks clean through it and leaves the
+        # volume's points carrying only P (autobind writes the field itself).
+        #
+        # The same code in an Attribute Wrangle also reports 0 errors, and it does
+        # something - in the wrong place. Proven by attribute placement on one build:
+        #   class point  -> point attribs gain `density`
+        #   class prim   -> prim attribs gain `density`
+        #   class detail -> detail attribs gain `density`
+        #   volumewrangle -> nothing is added; the VDB field is what changes
+        # So "it compiled" proves nothing here, and "an attribute appeared" does not
+        # mean the volume was edited.
+        "node_type": "volumewrangle",
+        "wrangle_kind": None,
+        "requires": ["a volume with a float field named density"],
+        "binding_note": "the Volume Wrangle binds VDB fields into VEX by name "
+                        "(autobind/bindeach/bindings parms); its first input is labelled "
+                        "'Volumes to Process with Wrangle' and aux inputs are read with "
+                        "volumesample(1, ...)",
         "summary": "Radial density falloff for a pyro source volume.",
         "code": """\
 // Volume wrangle: soften density outward from a centre.
@@ -87,6 +109,7 @@ f@density *= smooth(1.0, 0.0, d) * amount;
 """,
     },
     "color_by_attribute": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "point",
         "requires": ["any float point attribute named in attrib_name"],
         "summary": "Ramp colour from a float attribute, for lookdev debugging.",
@@ -101,6 +124,7 @@ float t = fit01(v, lo, max(hi, lo + 0.001));
 """,
     },
     "distance_falloff": {
+        "node_type": "attribwrangle",
         "wrangle_kind": "point",
         "requires": [],
         "summary": "f@influence falling off from a world-space pivot.",
@@ -142,7 +166,9 @@ def run(action: str, payload: dict) -> dict:
 
 
 def _list_templates(s, p):
-    return ok({"templates": {k: {"wrangle_kind": v["wrangle_kind"], "summary": v["summary"],
+    return ok({"templates": {k: {"node_type": v.get("node_type", "attribwrangle"),
+                                 "wrangle_kind": v["wrangle_kind"],
+                                 "summary": v["summary"],
                                  "requires": v["requires"]}
                              for k, v in TEMPLATES.items()}})
 
@@ -157,8 +183,10 @@ def _template(s, p):
     tpl = TEMPLATES[key]
     code = _apply_overrides(tpl["code"], p.get("overrides") or {})
     kind = p.get("wrangle_kind") or tpl["wrangle_kind"]
-    return ok({"template": key, "wrangle_kind": kind, "code": code,
+    return ok({"template": key, "node_type": tpl.get("node_type", "attribwrangle"),
+               "wrangle_kind": kind, "code": code,
                "requires": tpl["requires"], "summary": tpl["summary"],
+               "binding_note": tpl.get("binding_note", ""),
                "lint": lint(code)})
 
 
@@ -168,8 +196,10 @@ def _explain(s, p):
         raise SkillFailure("unknown_template", f"no VEX template {key!r}",
                            hint="available: " + ", ".join(sorted(TEMPLATES)))
     tpl = TEMPLATES[key]
-    return ok({"template": key, "summary": tpl["summary"], "requires": tpl["requires"],
-               "code": tpl["code"],
+    return ok({"template": key, "node_type": tpl.get("node_type", "attribwrangle"),
+               "wrangle_kind": tpl["wrangle_kind"], "summary": tpl["summary"],
+               "requires": tpl["requires"], "code": tpl["code"],
+               "binding_note": tpl.get("binding_note", ""),
                "line_notes": _line_notes(tpl["code"])})
 
 
@@ -243,26 +273,46 @@ def lint(code: str) -> list[dict]:
         findings.append({"severity": "error", "rule": "c_preprocessor",
                          "message": "VEX has no C preprocessor"})
 
-    # Discovered the hard way on 22.0.368: brace initializers accept constants
-    # only. `{0, 1, 0}` parses; `{s, s, s}` fails with
-    # "Syntax error, unexpected identifier". set(a, b, c) always parses.
+    # Discovered the hard way on 22.0.368: brace initializers accept numeric
+    # constants only. `{0, 1, 0}` parses; `{s, s, s}` fails with "Syntax error,
+    # unexpected identifier", and so does a member reference - `vector p =
+    # {@P.x, 2.0, 1.0};` fails to cook while the old narrower regex stayed silent.
+    # set(a, b, c) and named-vector construction always parse.
     for m in re.finditer(r"\{\s*([^{}]*?)\s*\}", code):
         inner = m.group(1)
         if not inner or "," not in inner:
             continue
-        if re.search(r"(?<![A-Za-z_0-9@.])[A-Za-z_][A-Za-z_0-9]*\s*,", inner) and \
-                not re.fullmatch(r"[\s0-9.,\-+eExX]+", inner):
+        numeric_only = bool(re.fullmatch(r"[\s0-9.,\-+eExX]+", inner))
+        has_name = bool(re.search(r"(?<![A-Za-z_0-9@.])[A-Za-z_][A-Za-z_0-9]*\s*[,}]|@",
+                                  inner))
+        if has_name and not numeric_only:
             findings.append({
                 "severity": "warning", "rule": "brace_init_with_variables",
                 "message": f"brace initializer with non-constants: {{{inner}}}",
-                "hint": "on H22 an Attribute Wrangle rejects variable brace inits; "
-                        "use set(a, b, c) or build a named vector variable first"})
+                "hint": "on H22 a wrangle brace initializer takes numeric "
+                        "constants only - identifiers AND member references such as "
+                        "@P.x both fail to cook. Use set(a, b, c) or build a named "
+                        "vector variable first"})
             break
     return findings
 
 
+VALIDATE_NODE_TYPES = ("attribwrangle", "volumewrangle")
+
+
 def _validate(s, p):
-    """Compile-check by cooking a real wrangle. The authority on validity."""
+    """Compile-check by cooking a real node of the right kind. The authority on validity.
+
+    Which node the code lands in is part of the claim, so it is chosen deliberately
+    rather than always defaulting to an Attribute Wrangle. Verified on 22.0.368:
+    `volumewrangle` is a real SOP type (parms `snippet`, `autobind`, `bindeach`,
+    `bindings`, `exportlist`, `group`, `vdb_signedflood`, `vex_*` - and **no** `class`
+    parm; input 0 is labelled 'Volumes to Process with Wrangle'), and this repo's
+    density-falloff snippet cooks clean through it: 0 errors, 1 Volume prim out. The
+    identical snippet inside an Attribute Wrangle also reports 0 errors while changing
+    nothing at all - the volume's points still carry only `P`. A validity answer that
+    ignores node type therefore proves syntax and nothing more.
+    """
     if not p.get("code") and not p.get("template"):
         raise SkillFailure("invalid_input", "validate needs 'code' or 'template'")
     if p.get("template"):
@@ -271,37 +321,87 @@ def _validate(s, p):
             raise SkillFailure("unknown_template", f"no VEX template {key!r}",
                                hint="available: " + ", ".join(sorted(TEMPLATES)))
         code = TEMPLATES[key]["code"]
-        kind = p.get("wrangle_kind") or TEMPLATES[key]["wrangle_kind"]
+        node_type = p.get("node_type") or TEMPLATES[key].get("node_type", "attribwrangle")
+        kind = p.get("wrangle_kind") or TEMPLATES[key].get("wrangle_kind")
     else:
-        code, kind = p["code"], (p.get("wrangle_kind") or "point")
+        code = p["code"]
+        node_type = p.get("node_type") or "attribwrangle"
+        kind = p.get("wrangle_kind") or "point"
+    if node_type not in VALIDATE_NODE_TYPES:
+        raise SkillFailure("invalid_input",
+                           f"validate cannot build node type {node_type!r}",
+                           hint="supported: " + ", ".join(VALIDATE_NODE_TYPES),
+                           details={"node_type": node_type})
 
     geo = s.ensure_geo(p["container"])
-    grid, wrangle = s.chain(geo, ["grid", "attribwrangle"], ["vexcheck_grid", "vexcheck_wrangle"])
-    index, menu = _class_index(wrangle, kind)
-    wrangle.parm("class").set(index)
-    wrangle.parm("snippet").set(code)
+    mark = len(s.created)
+    class_value, class_menu = None, []
+    authored, bindings = {}, {}
+    if node_type == "volumewrangle":
+        # Give the code a field to act on; without this "it cooked" is meaningless.
+        sphere, volume, target = s.chain(
+            geo, ["sphere", "volume", "volumewrangle"],
+            ["vexcheck_sphere", "vexcheck_vol", "vexcheck_wv"])
+        for parm, value in (("name", "density"), ("type", "float"),
+                            ("rank", "scalar"), ("initialval1", 1)):
+            parm_obj = volume.parm(parm)
+            authored[parm] = None if parm_obj is None else (
+                parm_obj.set(value), parm_obj.rawValue())[1]
+        target.parm("snippet").set(code)
+        for parm in ("autobind", "bindeach", "group"):
+            parm_obj = target.parm(parm)
+            bindings[parm] = None if parm_obj is None else parm_obj.rawValue()
+    else:
+        grid, target = s.chain(geo, ["grid", "attribwrangle"],
+                              ["vexcheck_grid", "vexcheck_wrangle"])
+        class_value, class_menu = _class_index(target, kind)
+        target.parm("class").set(class_value)
+        target.parm("snippet").set(code)
+
     try:
-        cook = s.cook(wrangle.path())
+        cook = s.cook(target.path())
     except SkillFailure as exc:
         # Capture everything BEFORE destroying the node: hou.Node objects raise
         # ObjectWasDeleted once their node is gone, which hides the real cause.
-        wrangle_path = wrangle.path()
-        details = {"wrangle": wrangle_path, "errors": exc.err.details,
-                   "static_lint": lint(code)}
+        target_path = target.path()
+        details = {"target": target_path, "node_type": node_type,
+                   "errors": exc.err.details, "static_lint": lint(code)}
         hint = _compile_hint(exc.err.details.get("errors", []))
         if not p.get("keep", False):
             _cleanup(s, geo)
         raise SkillFailure("vex_invalid", exc.err.message, hint=hint,
                            source="vex-helper.validate", details=details)
-    stats = s.geometry_stats(wrangle.path())
+    stats = s.geometry_stats(target.path())
+    # Snapshot everything about the node BEFORE cleanup destroys it: a hou.Node
+    # object raises ObjectWasDeleted afterwards, which is how every template here
+    # managed to "fail" a cook it had actually passed.
+    target_path = target.path()
+    input_labels = list(target.inputLabels())
+    created = list(s.created[mark:])
     if not p.get("keep", False):
         _cleanup(s, geo)
-    return ok({"valid": True, "wrangle_kind": kind, "class_parm_value": index,
-               "class_menu": menu, "static_lint": lint(code),
-               "cook": cook, "result": stats, "cleaned_up": not p.get("keep", False),
-               "scope": "syntax/compile check on polygon input; semantic correctness "
-                        "(e.g. a volume template over real voxels) is not proven",
-               "node_kept_at": wrangle.path() if p.get("keep", False) else None})
+    return ok({
+        "valid": True,
+        "node_type": node_type,
+        "wrangle_kind": kind if node_type == "attribwrangle" else None,
+        "class_parm_value": class_value,
+        "class_menu": class_menu,
+        "volume_field_authored": authored,
+        "volume_bindings": bindings,
+        "input_labels": input_labels,
+        "static_lint": lint(code),
+        "cook": cook,
+        "result": stats,
+        "created_nodes": [] if p.get("keep", False) else created,
+        "cleaned_up": not p.get("keep", False),
+        "scope": ("syntax plus a real cook of " + node_type + " over a synthetic input; "
+                  + ("the field 'density' genuinely exists there, so the binding is "
+                     "exercised - your own volumes' resolutions and field names are "
+                     "still not implied"
+                     if node_type == "volumewrangle" else
+                     "polygon input, so a volume-shaped snippet proves syntax only")),
+        "node_kept_at": target_path if p.get("keep", False) else None,
+    })
 
 
 def _cleanup(s, geo_path: str) -> None:
@@ -394,13 +494,115 @@ def _apply_overrides(code: str, overrides: dict) -> str:
     return code
 
 
+# Calls this skill will not question. Two sources, both honest:
+#  1. names this repo's own templates call - those snippets cook with 0 errors under
+#     hython Tier B on 22.0.368, so VEX demonstrably accepts them on this build;
+#  2. a curated set of intrinsics used while building these skills.
+# This is NOT Houdini's full builtin list (the install ships no machine-readable
+# reference to parse), so the note wording says "not in this skill's verified list"
+# rather than claiming a function does not exist.
+_VERIFIED_CALLS_EXTRA = {
+    "float", "int", "vector", "vector4", "matrix", "matrix3", "matrix4", "string",
+    "set", "get", "length", "len", "dot", "cross", "normalize", "min", "max", "abs",
+    "floor", "ceil", "round", "clamp", "smooth", "random", "rand", "noise",
+    "noisefreq", "pnoise", "curlnoise", "curlnoise4d", "fit", "fit01", "fit10",
+    "fit11", "remap", "comp", "vtransform", "xform", "totexture", "voxelfetch",
+    "volumesample", "volumeindex", "intersect", "prim", "vertex", "point",
+    "prcount", "pointcount", "vertexcount", "primnum", "pointnum", "vertexnum",
+    "detail", "getbbox", "rotate", "split", "join", "strip", "lpad", "rpad",
+    "upper", "lower", "title", "find", "printf", "sprintf", "error", "warning",
+    "ch", "chi", "chf", "chv", "chs", "chsop", "chip", "opinputpath", "opfullpath",
+    "atan2", "pow", "sqrt", "log", "exp", "sin", "cos", "tan", "asin", "acos",
+    "degrees", "radians", "sign", "frac", "isnan", "isinf", "atan", "cbrt",
+}
+
+_CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+
+
+def _verified_calls() -> set:
+    names = set(_VERIFIED_CALLS_EXTRA)
+    for tpl in TEMPLATES.values():
+        for match in _CALL_RE.finditer(tpl["code"]):
+            names.add(match.group(1))
+    return names
+
+
+# VEX type sigils this skill is sure of; anything else is reported verbatim rather
+# than guessed at, because a wrong type name in a note is worse than no name.
+# VEX type sigils this skill is sure of; anything else is reported verbatim rather
+# than guessed at, because a wrong type name in a note is worse than no name.
+_SIGIL = {"f": "float", "i": "int", "v": "vector", "s": "string", "b": "bool",
+          "4": "vector4", "3": "matrix3", "2": "matrix2"}
+
+_VEX_KEYWORDS = {"if", "else", "elif", "for", "while", "switch", "do", "return",
+                 "break", "continue", "int", "float", "vector", "vector4", "matrix",
+                 "matrix3", "matrix4", "string", "void"}
+
+_RE_WRITE = re.compile(r"^\s*(?:(?P<sigil>[a-v0-9])?@)?(?P<attr>\w+)\s*(?:[-+*/]?=)\s*[^=]")
+_RE_CONTROL = re.compile(r"\b(?P<kw>if|else|elif|for|while|switch|do)\b")
+_RE_DECLARE = re.compile(r"\b(?P<type>float|int|vector|vector4|matrix|matrix3|matrix4|"
+                         r"string|int\[\]|float\[\]|string\[\])\s+(?P<name>\w+)")
+_RE_READ = re.compile(r"\b(?P<sigil>[a-v0-9])@(?P<attr>\w+)")
+_RE_CHANNEL = re.compile(r"\bch(?:[ifvs]|sop|ip)?\(|opinputpath")
+
+
+def _sigil_word(sigil: str) -> str:
+    word = _SIGIL.get(sigil)
+    return word or ("unknown type sigil " + sigil)
+
+
+def _note_for(line: str, verified: set) -> str:
+    """Rule-based note for one VEX line: structural, not semantic.
+
+    `explain` deliberately does not pretend to understand what the code computes.
+    The note says what the line *is* (a write, a declaration, a call on something the
+    skill has not seen compile) so an agent can spot the suspicious parts and go read
+    them. Validity itself is settled by cooking the code in validate().
+    """
+    note = ""
+    write = _RE_WRITE.match(line)
+    control = _RE_CONTROL.search(line)
+    declare = _RE_DECLARE.search(line)
+    if write:
+        sigil = write.group("sigil")
+        attr = write.group("attr")
+        note = ("writes " + attr + " (" + _sigil_word(sigil) + " attribute)"
+                if sigil else "assigns " + attr)
+    elif declare:
+        note = f"declares local {declare.group('name')} of type {declare.group('type')}"
+    elif control:
+        note = f"control flow ({control.group('kw')})"
+    elif _RE_CHANNEL.search(line):
+        note = "reads a channel or op-input path from the node, not from geometry"
+    elif re.search(r"\breturn\b", line):
+        note = "returns from the snippet"
+    elif _RE_READ.search(line):
+        read = _RE_READ.search(line)
+        note = ("reads " + read.group("attr") + " ("
+                + _sigil_word(read.group("sigil")) + " attribute)")
+    elif _CALL_RE.search(line):
+        note = "calls " + _CALL_RE.search(line).group(1) + "()"
+    if not note:
+        note = "expression / assignment"
+    # Typos hide inside declarations and conditions, so the call check runs over the
+    # whole line regardless of which shape won.
+    suspect = sorted({name for name in _CALL_RE.findall(line)
+                      if name not in verified and name not in _VEX_KEYWORDS})
+    if suspect:
+        note += ("; calls " + ", ".join(suspect) + " - not in this skill's "
+                 "verified-call list (names its own templates compiled with on "
+                 "22.0.368), so check the VEX reference before trusting it")
+    return note
+
+
 def _line_notes(code: str) -> list[dict]:
+    verified = _verified_calls()
     out = []
     for i, ln in enumerate(code.splitlines(), 1):
         t = ln.strip()
         if not t or t.startswith("//"):
             continue
-        out.append({"line": i, "code": t})
+        out.append({"line": i, "code": t, "note": _note_for(t, verified)})
     return out
 
 

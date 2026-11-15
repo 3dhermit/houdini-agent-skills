@@ -176,19 +176,166 @@ class TestVexValidation(unittest.TestCase):
     def tearDown(self):
         self.s.destroy_matching("/obj/asmvex_*")
 
-    def test_all_templates_compile(self):
+    def test_all_templates_compile_as_advertised(self):
+        """Each template is cooked in the node type the template itself declares.
+
+        The previous version of this test substituted kind "point" for the volume
+        template, which hid a contract break: that template shipped wrangle_kind
+        "volume", a value the schema enum forbids and the Attribute Wrangle class menu
+        does not offer. Validating every snippet in one convenient node tests the
+        test, not the skill.
+        """
         from skills import import_skill_module
         vex = import_skill_module("vex-helper")
         bad = []
         for key, tpl in vex.TEMPLATES.items():
-            kind = "point" if tpl["wrangle_kind"] == "volume" else tpl["wrangle_kind"]
             try:
-                vex.run("validate", {"template": key, "wrangle_kind": kind,
-                                     "container": f"asmvex_{key}", "keep": False})
+                out = vex.run("validate", {"template": key,
+                                           "container": f"asmvex_{key}", "keep": False})
+                self.assertEqual(out["node_type"],
+                                 tpl.get("node_type", "attribwrangle"),
+                                 f"{key}: validated in {out['node_type']}, template says "
+                                 f"{tpl.get('node_type')}")
             except Exception as exc:  # noqa: BLE001
                 bad.append((key, str(exc)[:220]))
         self.assertFalse(bad, "templates that failed a real cook:\n" +
                          "\n".join(f"  {k}: {m}" for k, m in bad))
+
+    def test_the_volume_snippet_is_only_meaningful_in_a_volume_wrangle(self):
+        """The volumewrangle route is the one that edits the field.
+
+        The wrong-node half of this claim lives in
+        test_the_same_snippet_lands_in_the_place_the_class_says, because "0 errors,
+        0 effect" turned out to be wrong: the wrong node writes an attribute in the
+        wrong place instead of doing nothing.
+        """
+        from skills import import_skill_module
+        vex = import_skill_module("vex-helper")
+        good = vex.run("validate", {"template": "volume_density_falloff",
+                                    "container": "asmvex_vw", "keep": False})
+        self.assertEqual(good["node_type"], "volumewrangle")
+        self.assertIsNone(good["wrangle_kind"],
+                          "volumewrangle has no class menu; the payload must not invent one")
+        self.assertEqual(good["class_parm_value"], None)
+        self.assertEqual(good["volume_field_authored"]["name"], "density")
+        self.assertEqual(good["volume_field_authored"]["initialval1"], "1")
+        self.assertEqual(good["result"]["prim_types"].get("Volume"), 1)
+        self.assertEqual(good["input_labels"][0], "Volumes to Process with Wrangle")
+        with self.assertRaises(Exception) as cm:
+            vex.run("validate", {"template": "volume_density_falloff",
+                                 "node_type": "garbagewrangle",
+                                 "container": "asmvex_bad", "keep": False})
+        self.assertIn("garbagewrangle", str(cm.exception))
+
+    def test_the_same_snippet_lands_in_the_place_the_class_says(self):
+        """Four shapes, one snippet, 0 errors everywhere - only placement differs.
+
+        hython probe on 22.0.368 over a Volume SOP field named density: class point
+        added a POINT attribute, class prim a PRIM attribute, class detail a DETAIL
+        attribute, and `volumewrangle` added nothing because autobind changed the VDB
+        field. Pinned here so the docs' table cannot drift back into a guess.
+        """
+        import hou
+        code = ("vector centre = {0, 0, 0};\nfloat radius = 1.5;\nfloat amount = 1.0;\n"
+                "float d = length(@P - centre) / max(radius, 0.001);\n"
+                "f@density *= smooth(1.0, 0.0, d) * amount;\n")
+        geo = hou.node("/obj").createNode("geo", "asmvex_place")
+        rows = {}
+        try:
+            for label, type_name, class_index in (
+                    ("volumewrangle", "volumewrangle", None),
+                    ("point", "attribwrangle", 2),
+                    ("prim", "attribwrangle", 1),
+                    ("detail", "attribwrangle", 0)):
+                sph = geo.createNode("sphere", "pl_%s_vol" % label)
+                vol = geo.createNode("volume", "pl_%s_field" % label)
+                vol.setInput(0, sph)
+                for parm, value in (("name", "density"), ("type", "float"),
+                                    ("rank", "scalar"), ("initialval1", 1)):
+                    vol.parm(parm).set(value)
+                wr = geo.createNode(type_name, "pl_%s_wr" % label)
+                wr.setInput(0, vol)
+                if class_index is not None:
+                    wr.parm("class").set(class_index)
+                wr.parm("snippet").set(code)
+                g = wr.geometry()
+                rows[label] = {"errors": len(wr.errors()),
+                               "point": sorted(a.name() for a in g.pointAttribs()),
+                               "prim": sorted(a.name() for a in g.primAttribs()),
+                               "detail": sorted(a.name() for a in g.globalAttribs())}
+        finally:
+            node = hou.node(geo.path())
+            if node is not None:
+                node.destroy()
+        for label, row in rows.items():
+            self.assertEqual(row["errors"], 0,
+                             f"{label}: expected the silent case, got an error")
+        self.assertNotIn("density", rows["volumewrangle"]["point"],
+                         "volumewrangle must not leave a stray point attribute")
+        self.assertIn("density", rows["point"]["point"])
+        self.assertNotIn("density", rows["point"]["prim"])
+        self.assertIn("density", rows["prim"]["prim"])
+        self.assertIn("density", rows["detail"]["detail"])
+
+    def test_lint_never_clears_what_the_compiler_refuses(self):
+        """Lint is a pre-filter, not a certificate - both directions on 22.0.368.
+
+        A member brace initializer `{@P.x, 2.0, 1.0}` and an undefined function both
+        fail to cook. The linter flags the first and is silent about the second, so a
+        clean lint result proves nothing and the tier must always be reported.
+        """
+        from houdini_skills.errors import SkillFailure
+        from skills import import_skill_module
+        vex = import_skill_module("vex-helper")
+        member = 'vector p = {@P.x, 2.0, 1.0};\nf@pscale = length(p);\n'
+        undefined = "f@pscale = nosuchfunction(@P);\n"
+        rules = [f["rule"] for f in vex.run("lint", {"code": member})["findings"]]
+        self.assertIn("brace_init_with_variables", rules)
+        self.assertTrue(vex.run("lint", {"code": undefined})["clean"],
+                        "the linter cannot know which function names exist")
+        for code in (member, undefined):
+            with self.assertRaises(SkillFailure) as cm:
+                vex.run("validate", {"code": code, "container": "asmvex_reject",
+                                     "keep": False})
+            self.assertEqual(cm.exception.to_result()["error"]["kind"], "vex_invalid")
+
+    def test_explain_annotates_every_code_line(self):
+        """`explain` used to return line numbers and the code back again.
+
+        An action named explain that copies the source is decoration. Each non-comment
+        line now gets a structural note, and an unknown call is flagged even when it
+        hides inside a declaration - which is where a typo does the most damage.
+        """
+        from skills import import_skill_module
+        vex = import_skill_module("vex-helper")
+        for key in sorted(vex.TEMPLATES):
+            out = vex.run("explain", {"template": key})
+            notes = out["line_notes"]
+            self.assertTrue(notes, f"{key}: no line notes at all")
+            for note in notes:
+                self.assertTrue(note.get("note"),
+                                f"{key} line {note.get('line')}: empty note")
+                self.assertNotEqual(note["note"].strip(), note["code"].strip(),
+                                    f"{key} line {note['line']}: note is just the code")
+        flagged = vex._note_for("float q = frobnicate(@P);", vex._verified_calls())
+        self.assertIn("frobnicate", flagged)
+        self.assertIn("verified-call list", flagged)
+        clean = vex._note_for("float d = length(@P);", vex._verified_calls())
+        self.assertNotIn("verified-call list", clean)
+
+    def test_list_templates_names_the_node_each_one_wants(self):
+        """An agent picking a template needs to know it is a volumewrangle."""
+        from skills import import_skill_module
+        vex = import_skill_module("vex-helper")
+        listing = vex.run("list_templates", {})["templates"]
+        self.assertEqual(listing["volume_density_falloff"]["node_type"], "volumewrangle")
+        self.assertEqual(listing["volume_density_falloff"]["wrangle_kind"], None)
+        for key, info in listing.items():
+            if key == "volume_density_falloff":
+                continue
+            self.assertEqual(info["node_type"], "attribwrangle", key)
+            self.assertIn(info["wrangle_kind"], ("point", "prim", "vertex", "detail"),
+                          f"{key}: {info['wrangle_kind']}")
 
     def test_broken_vex_is_caught(self):
         from houdini_skills.errors import SkillFailure
@@ -515,6 +662,70 @@ class TestVerifiedApiFacts(unittest.TestCase):
         self.assertIn("sublayer", lop)
         for wrong in ("stageimport", "componentlist", "addloplattriblayer"):
             self.assertNotIn(wrong, lop, f"{wrong} is not a LOP type; docs must not claim it")
+
+
+@REAL_ONLY
+class TestSopImportAction(unittest.TestCase):
+    """`sopimport` had never been called by a single test until live pass 9c.
+
+    What that pass exposed: the action echoed the requested prim_path back without
+    ever binding it, and reported nothing about the stage it built. Both are fixed by
+    binding the real parm and reading the stage back beside it.
+    """
+
+    def setUp(self):
+        import hou
+        from houdini_skills import hou_api
+        self.hou = hou
+        self.s = hou_api.Session.open()
+        self.created = []
+
+    def tearDown(self):
+        for path in sorted(set(self.created), key=lambda x: x.count("/"), reverse=True):
+            node = self.hou.node(path)
+            if node is not None:
+                node.destroy()
+
+    def _source(self):
+        geo = self.hou.node("/obj").createNode("geo", "asmsrc_imp")
+        self.created.append(geo.path())
+        tor = geo.createNode("torus", "imp_torus")
+        self.created.append(tor.path())
+        return geo.path() + "/imp_torus"
+
+    def test_sopimport_binds_prim_path_and_reports_the_stage(self):
+        from skills import import_skill_module
+        usd = import_skill_module("usd-pipeline")
+        out = usd.run("sopimport", {"path": self._source(), "stage": "asmlimp",
+                                    "prim_path": "/world"})
+        self.created += list(out["created_nodes"])
+        self.assertEqual(out["parm"], "soppath")
+        self.assertEqual(out["prim_path_parm"], "primpath")
+        self.assertEqual(out["prim_path_requested"], "/world")
+        self.assertEqual(out["prim_path_kept"], "/world",
+                         "the parm must be read back, not echoed from the request")
+        self.assertTrue(out["stage_prim_paths"], "the stage read-back came back empty")
+        self.assertIn("Mesh:Total", out["stage_prim_stats"],
+                      "stagePrimStats() is the cheap prim census on this build")
+        landed = [pp for pp in out["stage_prim_paths"] if pp.startswith("/world")]
+        if not landed:
+            # Verified on 22.0.368: primpath holds the value, geometry still authors
+            # under the node's own path - at the node AND one LOP downstream.
+            self.assertIn("no stage prim lives under it",
+                          out["prim_path_readback_note"])
+        else:
+            self.assertEqual(out["prim_path_readback_note"], "",
+                             "the trap note must only appear when the trap fires")
+
+    def test_sopimport_without_prim_path_stays_quiet(self):
+        from skills import import_skill_module
+        usd = import_skill_module("usd-pipeline")
+        out = usd.run("sopimport", {"path": self._source(), "stage": "asmlimp2"})
+        self.created += list(out["created_nodes"])
+        self.assertEqual(out["prim_path_requested"], "")
+        self.assertEqual(out["prim_path_parm"], "")
+        self.assertEqual(out["prim_path_readback_note"], "")
+        self.assertTrue(out["stage_prim_paths"])
 
 
 @REAL_ONLY

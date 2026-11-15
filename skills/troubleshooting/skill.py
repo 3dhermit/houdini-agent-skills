@@ -709,6 +709,103 @@ KNOWLEDGE_BASE = [
                     "pr.volumePrimitive().voxelAsDouble(...) raised AttributeError; "
                     "g.attribs() raised AttributeError; g.globalAttribs() == []",
     },
+    {
+        "id": "volumewrangle-has-no-class-parm",
+        "cause": "Volume-field VEX was put in an Attribute Wrangle, or code tried to set "
+                 "`class` on a Volume Wrangle. `volumewrangle` is a separate SOP type with "
+                 "parms snippet/autobind/bindeach/bindings/exportlist/group and NO class "
+                 "parm; its input 0 is labelled 'Volumes to Process with Wrangle'.",
+        "match": r"no parm named .?class.?|parm .*class.* not found|Volumes to Process",
+        "fix": "Create `volumewrangle` for density/field work and leave class alone; feed "
+               "it a Volume SOP field (name/type/rank/initialval1/divsize). "
+               "vex-helper.validate takes node_type for exactly this reason.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe: volumewrangle present in Sop nodeTypes, parms read "
+                    "back, snippet cooked with 0 errors and 1 Volume prim out; no class "
+                    "parm on the node.",
+    },
+    {
+        "id": "wrong-wrangle-class-writes-attributes-in-the-wrong-place",
+        "cause": "VEX aimed at the wrong node type or run class. The same density snippet "
+                 "was cooked on 22.0.368 over a Volume SOP field named density in four "
+                 "shapes; all four reported 0 errors. Attribute placement differed: class "
+                 "point added a POINT attribute density, class prim a PRIM attribute, "
+                 "class detail a DETAIL attribute, and only volumewrangle added nothing "
+                 "while changing the VDB field itself. Silence is not evidence of effect, "
+                 "and 'an attribute appeared' is not evidence the volume was edited.",
+        "match": r"0 errors|no errors|compiles? clean|nothing happen|no effect|density",
+        "fix": "Report where the write landed: point / prim / detail attrib names and prim "
+               "types from the cook, and use volumewrangle for VDB field edits. "
+               "vex-helper.validate returns geometry_stats and the node type it used.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe 24 (four shapes, one build): point_attribs/prim_attribs/"
+                    "detail_attribs as described, errors 0 in every case; pinned by Tier B "
+                    "test test_the_same_snippet_lands_in_the_place_the_class_says.",
+    },
+    {
+        "id": "hou-object-deleted-after-cleanup",
+        "cause": "Reporting code reads a node after its container was destroyed. "
+                 "hou.Node raises 'Attempt to access an object that no longer exists in "
+                 "Houdini', which then looks like a cook failure. vex-helper shipped this "
+                 "bug on its SUCCESS path: all seven templates 'failed' after cooking fine "
+                 "because input_labels was read after cleanup.",
+        "match": r"no longer exists in Houdini|ObjectWasDeleted|Attempt to access an object",
+        "fix": "Snapshot path, labels, parms and geometry stats into plain Python BEFORE "
+               "destroying anything, and build the payload from the snapshot. In error "
+               "paths capture target.path() before cleanup as well.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython Tier B run after the node_type rewrite: every template raised "
+                    "the message although the cook succeeded; fixed by snapshotting before "
+                    "_cleanup() in skills/vex-helper/skill.py _validate.",
+    },
+    {
+        "id": "menuitems-quiet-is-not-proof",
+        "cause": "menuItems() usually raises OperationFailed on a non-menu parm, but not "
+                 "always: on volumewrangle.snippet it returned that parm's default snippet "
+                 "text as a one-item list. Treating a quiet menuItems() as proof of a menu "
+                 "inverts the check.",
+        "match": r"menuItems|OperationFailed.*menu|not a menu",
+        "fix": "Decide menu-ness from the parm template (MenuParmTemplate) or from a parm "
+               "that accepts a label via set(); never from menuItems() alone. For read-"
+               "back, menu parms keep the identifier in rawValue() and the index in eval().",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe: volumewrangle.parm('snippet').menuItems() returned the "
+                    "default snippet string as one item, while flipsource float parms "
+                    "raised OperationFailed.",
+    },
+    {
+        "id": "sopimport-primpath-does-not-move-prims",
+        "cause": "A SOP Import LOP's primpath parm (label 'Primitive Path', default "
+                 "'/$OS') was set and taken as proof of where geometry would land. On "
+                 "22.0.368 it holds the value while the stage still authors prims under "
+                 "the node's own path (/node/mesh_0) - verified at the node and one LOP "
+                 "downstream through a null LOP.",
+        "match": r"primpath|prim_path|Primitive Path|stage.Traverse|mesh_0",
+        "fix": "Bind it, read it back, and report stage_prim_paths / stagePrimStats() "
+               "beside it. usd-pipeline.sopimport returns both plus a note when the "
+               "value and the stage disagree. Never report a stage from the requested "
+               "path alone.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probes 26-28: primpath default '/$OS'; kept '/world'; stage "
+                    "paths identical at the node and downstream; stagePrimStats gave "
+                    "{'Xform:Total': '1', 'Mesh:Total': '1'}. Live pass 9c first exposed "
+                    "the echo-only payload.",
+    },
+    {
+        "id": "lopnetwork-has-no-stage-accessor",
+        "cause": "Reading the composed stage from a LOP network. hou.LopNetwork has no "
+                 "stage(), no displayLop() and no stage-named method at all; stage() and "
+                 "friends live on LOP nodes. The container type is also `lopnet`, not "
+                 "`lop` - createNode('lop') raises Invalid node type name.",
+        "match": r"has no attribute '?stage'?|displayLop|Invalid node type name.*lop",
+        "fix": "Read stage() (or stagePrimStats()) from a LOP node: the importing node "
+               "itself, or a downstream null LOP for the composed view. Create the "
+               "network with type `lopnet`.",
+        "verified": True, "observed_on": "22.0.368",
+        "evidence": "hython probe 27: dir(lopnet) matched no 'stage' names; "
+                    "displayLop() raised AttributeError; the same probe's "
+                    "createNode('lop') raised hou.OperationFailed Invalid node type name.",
+    },
 ]
 
 # Causes of empty geometry, checked in order by empty_geo_report.

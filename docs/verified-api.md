@@ -117,7 +117,9 @@ identical in both places — `kept` = `rawValue()`, `eval` = `eval()`.
 Compare like for like: a label against `rawValue()`, an index against `eval()`, or
 resolve the selection by indexing `menuItems()` with the index. `hou_api._same_value`
 takes `menu_items` as that fallback and drift entries carry the item list.
-`menuItems()` raises on non-menu parms, which is how the wrapper tells the two apart.
+`menuItems()` raises on most non-menu parms, which is how the wrapper usually tells the
+two apart - but see the caveat below: on `volumewrangle.snippet` it returns default text
+instead of raising, so menu-ness comes from the parm template when it matters.
 
 Panes are GUI-only: `hou.ui` **does not exist in hython at all**
 (`module 'hou' has no attribute 'ui'`). In a live GUI it does: `hou.ui.paneTabs()`
@@ -367,7 +369,7 @@ Volume SOP's `voxelsize`, which the builder binds and reads back.
 | wrangle context | a detail wrangle on a raw grid sees **1 prim, 0 points** in `s@numprims`/`n@numpoints` style reads for packed contexts - do not write stats tests that assume both. |
 | attribute lists | `geo.pointAttribs()`, `geo.primAttribs()` (singular **prim**), `geo.vertexAttribs()`, `geo.globalAttribs()`. **`geo.attribs()` and `geo.primsAttribs()` do not exist** - inside a `try/except` they silently return nothing and the report looks like empty geometry. |
 | prim **types** matter | `geometry_stats` reports `prim_types` (a `{type_name: count}` map). A FLIP Source SOP holds **1 prim, 1 point** and the prim type is `VDB` — that is a correct source volume, not a broken chain. Verified `flipsource` facts: one input labelled "Geometry to Source From", output = 1 VDB prim + 1 point at the origin. |
-| menu accessor | `hou.Parm.menuItems()` **raises `hou.OperationFailed: Cannot get menu items for a non-menu parm`** on a plain parm - it does not return an empty list. Ask the parm template group instead, or wrap the call. |
+| menu accessor | `hou.Parm.menuItems()` **usually raises `hou.OperationFailed: Cannot get menu items for a non-menu parm`** on a plain parm - but do not treat a quiet call as proof of a menu. On 22.0.368 `volumewrangle.parm("snippet").menuItems()` returned that parm's **default snippet text** as a one-item list instead of raising. Decide menu-ness from `parmTemplateGroup().find(name)` (a `MenuParmTemplate`), not from whether `menuItems()` threw. |
 | `node.geometry()` can be None | an uncooked SOP solver returns no geometry object at all: a fresh `flipsolver` in a source chain gave `geometry() is None` while everything upstream cooked. Treat None as a state ("not stepped yet"), never as "empty geo". |
 
 ## Node types that exist (and do not)
@@ -414,7 +416,7 @@ available list. `karma_xpu` was never a node type.
 | `filecache::2.0` | `sopoutput` (the path), `f1`, `f2`, `trange` (`off`/`normal`), `execute`, `filemethod`, `filetype`, `loadfromdisk`, `mkpath`, `take` - **no `outputname`, `outputpath`, `t1`, `t2`, `method`, `name`, `outputnode`** |
 | `karma` | `picture`, `resolutionx`, `resolutiony`, `res_overridex`, `res_overridey`, `res_fraction`, `trange` (`off`/`normal`/`on`/`stage`), `f1`, `f2`, `samplesperpixel`, `pathtracedsamples`, `geosamples`, `xformsamples`, `varianceaa_*`, `render`, `renderdialog`, `execute`, `allframesatonce` - **no `renderer`, `rendermethod`, `schedule`, `vm_renderer`, `outputmode`, `usevpresolution`, `saverange`** |
 | USD Output ROP (`usd`) | `loppath`, `lopoutput` (default **`$HIP/usd/$OS.usd`**), `trange`, `f1`, `f2`, `execute`, `executebackground`, `outputprocessors` |
-| `sopimport` (LOP) | `soppath` |
+| `sopimport` (LOP) | `soppath`; `primpath` (label 'Primitive Path', default `'/$OS'`), `refprimpath`, `pathprefix` + `enable_pathprefix`, `savepath`, `enable_savepath`, `asreference`, `bindmaterials`, and ~90 handling parms (probed list). **`primpath` is bindable but does not move the authored prims on 22.0.368** - see the LOP stage section below |
 
 Frame range on ROPs and on File Cache is a **menu**, not a toggle: set `trange`
 to the menu's *item value* (`normal` on both here), never `1`/`0`.
@@ -475,6 +477,17 @@ Wire the solver's own inputs instead. `node.inputLabels()` on 22.0.368:
 `simulation-tools` returns these as `solver_wiring`, together with `dop_parms: []`
 so a caller can see the absence rather than take the doc's word for it. It wires
 input 0 only and lists the rest in `not_done`.
+
+## LOP stage truth (22.0.368)
+
+| fact | detail |
+|---|---|
+| stage accessor | `stage()`, `editableStage()`, `uneditableStage()`, `stagePrimStats()` and `isMostRecentStageLock()` exist on a **LOP node**. `hou.LopNetwork` has **none** of them - `dir(lopnet)` matched no 'stage' name at all, and `displayLop()` does not exist on it either. Read the stage off a LOP *node* (the SOP Import node itself, or a downstream `null` LOP). |
+| prim census | `node.stagePrimStats()` returns keys like `Mesh:Total`, `Xform:Total` - a cheap structured answer to "did the geometry actually land?" |
+| LOP container type | `lopnet`. There is **no `lop` node type**: `createNode("lop")` raises `hou.OperationFailed: Invalid node type name`. |
+| `primpath` trap | A SOP Import LOP with `primpath` set to `/world` reads back `/world`, yet `stage().Traverse()` still yields `/HoudiniLayerInfo`, `/<node>`, `/<node>/mesh_0` - checked on the importing node **and** one LOP downstream through a `null` LOP. Setting it to `''` changed nothing either. So `primpath` is not "where the prims go" in the configuration the skill builds, and a payload that echoes it back as if it were would be lying. `usd-pipeline.sopimport` now returns `prim_path_requested`, `prim_path_kept`, `stage_prim_paths`, `stage_prim_stats`, and a note when the value and the stage disagree. |
+| parm labels | `hou.Parm` has **no `label()`**. Labels come from `node.parmTemplateGroup().find(name).label()` - which is how `primpath` was identified as 'Primitive Path'. |
+| LOP types present | `sopimport`, `null`, `sublayer`, `componentoutput`, `componentgeometry`, `stagemanager`, `sceneimport`, `graftstages`, `configurestage`. |
 
 ## USD reality check
 

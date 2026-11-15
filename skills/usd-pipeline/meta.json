@@ -105,12 +105,14 @@
         },
         "prim_path": {
           "type": "string",
-          "default": "/world/asm"
+          "default": "",
+          "description": "Bound to the SOP Import LOP's `primpath` parm (label 'Primitive Path', node default '/$OS') ONLY when you pass it, then read back. No schema default on purpose: verified on 22.0.368 that binding it does not move the authored prims (stage still lists /<node>/mesh_0, at the node and one LOP downstream), so silently setting it would be a side effect with no benefit. The payload returns prim_path_kept beside stage_prim_paths and a note when they disagree."
         }
       },
       "required": [
         "path"
-      ]
+      ],
+      "description": "Import an SOP into a LOP stage and report what the stage actually contains (stage_prim_paths + stagePrimStats), with parm bindings read back rather than echoed."
     }
   }
 }

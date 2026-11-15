@@ -35,6 +35,12 @@ USD_ROP_PARMS = {
 }
 SOPIMPORT_PARMS = {
     "soppath": ["soppath", "soppath1", "inputpath"],
+    # `primpath` (label "Primitive Path", default '/$OS') exists and accepts a value,
+    # but on 22.0.368 it did NOT move the authored prims: with primpath set to /world
+    # the composed stage still listed /<node>/mesh_0, checked both on the importing
+    # node and one LOP downstream. Bound and read back anyway, with the stage contents
+    # reported beside it, so the mismatch is visible instead of hidden.
+    "primpath": ["primpath", "refprimpath"],
     # Verified on 22.0.368: a SOP Import LOP writes its own layer to `savepath`,
     # whose default is the template '$HIP/usd/$OS.usd'. That is where geometry
     # actually lands, and the ROP's file just points at it with a subLayers entry.
@@ -291,12 +297,42 @@ def _sopimport(s, p):
     bound = _set_first(imp, SOPIMPORT_PARMS["soppath"], p["path"])
     if not bound:
         raise SkillFailure("parm_not_found", f"no sop-path parm on {imp.path()}")
+    prim_requested = p.get("prim_path") or ""
+    prim_bound = _set_first(imp, SOPIMPORT_PARMS["primpath"], prim_requested) \
+        if prim_requested else ""
     try:
         s.cook(imp.path())
     except SkillFailure as exc:
         raise SkillFailure("sopimport_failed", exc.err.message,
                            hint=exc.err.hint, details=exc.err.details)
-    return ok({"lop": imp.path(), "parm": bound, "prim_path": p["prim_path"],
+    # Read-back truth: what the parm kept, and what the stage really contains.
+    prim_kept = ""
+    if prim_bound:
+        parm = imp.parm(prim_bound)
+        prim_kept = "" if parm is None else str(parm.rawValue())
+    stage_prim_paths, stage_prim_stats, stage_note = [], {}, ""
+    try:
+        stage = imp.stage()
+        stage_prim_paths = sorted(str(x.GetPath()) for x in stage.Traverse())[:40]
+        try:
+            stage_prim_stats = {str(k): str(v) for k, v in imp.stagePrimStats().items()}
+        except Exception:  # noqa: BLE001
+            stage_prim_stats = {}
+    except Exception as exc:  # noqa: BLE001
+        stage_note = "stage could not be read back: " + type(exc).__name__
+    if prim_requested and prim_kept == prim_requested:
+        landed = [pp for pp in stage_prim_paths if pp.startswith(prim_requested)]
+        if not landed:
+            stage_note = (
+                f"primpath reads back {prim_kept!r} but no stage prim lives under it; "
+                "on 22.0.368 the SOP Import LOP authors geometry under its own node "
+                "path (verified at the node and one LOP downstream), so primpath is "
+                "bound without moving the prims")
+    return ok({"lop": imp.path(), "parm": bound,
+               "prim_path_parm": prim_bound, "prim_path_requested": prim_requested,
+               "prim_path_kept": prim_kept, "prim_path_readback_note": stage_note,
+               "stage_prim_paths": stage_prim_paths,
+               "stage_prim_stats": stage_prim_stats,
                "created_nodes": s.created[mark:]})
 
 
