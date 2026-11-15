@@ -1,6 +1,6 @@
 {
   "name": "rendering",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Configure a Karma (or mantra) Render Output ROP: driver, resolution, frame range, output path, AOV requests. Config only - it does not silently render.",
   "houdini_versions": [
     "20.0",

@@ -1,6 +1,6 @@
 {
   "name": "simulation-tools",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Set up Pyro / RBD / FLIP objects, frame range and File Cache paths with version-discovered node names.",
   "houdini_versions": [
     "19.5",

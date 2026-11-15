@@ -1,4 +1,4 @@
-# Houdini Agent Skills - v1.0.0
+# Houdini Agent Skills - v2.0.0
 
 Skills that let an LLM agent drive **SideFX Houdini** through one shared,
 version-aware Python wrapper around `hou`, with a test suite that runs against a
@@ -102,7 +102,9 @@ changes; or the supported Houdini floor rises.
 docs, tests.
 
 Adding a skill is a MINOR. Renaming an action is MAJOR and needs a migration
-note in `SKILL_REGISTRY.md`. v1.0.0 limitations are listed there.
+note in `SKILL_REGISTRY.md`. v2.0.0 is a MAJOR: four payload schemas lost or
+gained knobs and most result envelopes grew read-back keys, so the migration
+note and the current limitations live in `SKILL_REGISTRY.md`.
 
 ## Contribution gate
 

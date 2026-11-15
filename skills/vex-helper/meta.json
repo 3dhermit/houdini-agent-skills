@@ -1,6 +1,6 @@
 {
   "name": "vex-helper",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Generate VEX from intent, lint it without Houdini, and compile-check it for real by cooking an Attribute Wrangle.",
   "houdini_versions": [
     "19.5",

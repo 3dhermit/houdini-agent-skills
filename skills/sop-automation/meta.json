@@ -1,82 +1,208 @@
 {
   "name": "sop-automation",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Create, wire, parameterize and inspect SOP networks through the shared hou wrapper.",
-  "houdini_versions": ["19.5", "20.0", "20.5", "21.0", "22.0"],
-  "verified_on": ["22.0.368"],
-  "dependencies": ["houdini_skills", "hython (or Houdini GUI with the MCP bridge)"],
+  "houdini_versions": [
+    "19.5",
+    "20.0",
+    "20.5",
+    "21.0",
+    "22.0"
+  ],
+  "verified_on": [
+    "22.0.368"
+  ],
+  "dependencies": [
+    "houdini_skills",
+    "hython (or Houdini GUI with the MCP bridge)"
+  ],
   "triggers": [
-    "build a SOP chain", "create a grid and bevel it", "wire nodes",
-    "what is in this network", "set parameters on a node", "inspect geometry counts"
+    "build a SOP chain",
+    "create a grid and bevel it",
+    "wire nodes",
+    "what is in this network",
+    "set parameters on a node",
+    "inspect geometry counts"
   ],
   "examples": [
     "hython -m houdini_skills.cli sop-automation grid_bevel --json '{\"container\":\"asm_demo\"}'",
     "hython -m houdini_skills.cli sop-automation geo_stats --json '{\"path\":\"/obj/asm_demo/bevel1\"}'"
   ],
   "sources": [
-    {"repo": "https://github.com/healkeiser/fxhoudinimcp", "license": "MIT", "used_for": "tool-surface naming (create_node, build_sop_chain, list_children); this skill reimplements the shape against raw hou, no code copied"},
-    {"repo": "https://github.com/probiner/DASH", "license": "MIT", "used_for": "idea of parm-name discovery; no code copied"}
+    {
+      "repo": "https://github.com/healkeiser/fxhoudinimcp",
+      "license": "MIT",
+      "used_for": "tool-surface naming (create_node, build_sop_chain, list_children); this skill reimplements the shape against raw hou, no code copied"
+    },
+    {
+      "repo": "https://github.com/probiner/DASH",
+      "license": "MIT",
+      "used_for": "idea of parm-name discovery; no code copied"
+    }
   ],
   "actions": {
     "create_node": {
       "type": "object",
-      "required": ["node_type", "name"],
+      "required": [
+        "node_type",
+        "name"
+      ],
       "properties": {
-        "node_type": {"type": "string", "description": "Houdini node type name, e.g. 'grid', 'polybevel'"},
-        "name": {"type": "string"},
-        "parent": {"type": "string", "default": "/obj"}
+        "node_type": {
+          "type": "string",
+          "description": "Houdini node type name, e.g. 'grid', 'polybevel'"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "string",
+          "default": "/obj"
+        }
       }
     },
     "chain": {
       "type": "object",
-      "required": ["types"],
+      "required": [
+        "types"
+      ],
       "properties": {
-        "types": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-        "names": {"type": "array", "items": {"type": "string"}},
-        "parent": {"type": "string", "default": "/obj"}
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parent": {
+          "type": "string",
+          "default": "/obj"
+        }
       }
     },
     "grid_bevel": {
       "type": "object",
       "properties": {
-        "container": {"type": "string", "default": "asm_sop"},
-        "size": {"type": "array", "items": {"type": "number"}, "default": [4, 0, 4]},
-        "divisions": {"type": "integer", "default": 10, "minimum": 1, "maximum": 500},
-        "bevel_width": {"type": "number", "default": 0.05, "minimum": 0}
+        "container": {
+          "type": "string",
+          "default": "asm_sop"
+        },
+        "size": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            4,
+            0,
+            4
+          ]
+        },
+        "divisions": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 500
+        },
+        "bevel_width": {
+          "type": "number",
+          "default": 0.05,
+          "minimum": 0
+        }
       }
     },
     "set_parms": {
       "type": "object",
-      "required": ["path", "parms"],
+      "required": [
+        "path",
+        "parms"
+      ],
       "properties": {
-        "path": {"type": "string"},
-        "parms": {"type": "object",
-                  "description": "parm name -> value. The result reads every parm back: `kept` is what the node now says and `drift` lists anything that did not stick. On 22.0.368 an out-of-range number or menu index is clamped with no error (grid.rows=-5 -> 1; karma.trange=99 -> 'stage'), and an int parm raises TypeError on a fractional value (karma.resolutionx=0.5)."}
+        "path": {
+          "type": "string"
+        },
+        "parms": {
+          "type": "object",
+          "description": "parm name -> value. The result reads every parm back: `kept` is what the node now says and `drift` lists anything that did not stick. On 22.0.368 an out-of-range number or menu index is clamped with no error (grid.rows=-5 -> 1; karma.trange=99 -> 'stage'), and an int parm raises TypeError on a fractional value (karma.resolutionx=0.5)."
+        }
       }
     },
     "read_parms": {
       "type": "object",
-      "required": ["path"],
-      "properties": {"path": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}}
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "find": {
       "type": "object",
-      "required": ["pattern"],
-      "properties": {"pattern": {"type": "string"}, "limit": {"type": "integer", "default": 200}}
+      "required": [
+        "pattern"
+      ],
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 200
+        }
+      }
     },
     "geo_stats": {
       "type": "object",
-      "required": ["path"],
-      "properties": {"path": {"type": "string"}}
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
     },
     "delete_node": {
       "type": "object",
-      "required": ["path", "confirm"],
-      "properties": {"path": {"type": "string"}, "confirm": {"type": "string"}}
+      "required": [
+        "path",
+        "confirm"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "string"
+        }
+      }
     },
     "list_types": {
       "type": "object",
-      "properties": {"parent": {"type": "string", "default": "/obj"}, "contains": {"type": "string", "default": ""}}
+      "properties": {
+        "parent": {
+          "type": "string",
+          "default": "/obj"
+        },
+        "contains": {
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }

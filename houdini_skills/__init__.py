@@ -9,7 +9,7 @@ from .errors import SkillError, SkillFailure, ok, suggest  # noqa: F401
 from .registry import discover, get, run_skill  # noqa: F401
 from .versions import HoudiniNotAvailable, MIN_SUPPORTED, parse_version  # noqa: F401
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __all__ = ["SkillFailure", "SkillError", "ok", "suggest", "discover", "get",
            "run_skill", "parse_version", "MIN_SUPPORTED", "HoudiniNotAvailable",
            "__version__"]

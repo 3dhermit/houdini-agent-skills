@@ -1,6 +1,6 @@
 {
   "name": "usd-pipeline",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Export Houdini SOP geometry to USD and report what landed on disk; Solaris sopimport checks where LOPs are available.",
   "houdini_versions": [
     "19.5",
